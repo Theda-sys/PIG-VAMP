@@ -1,0 +1,765 @@
+---
+title: "2.plots"
+author: "Theda Bartolomaeus"
+date: "7/20/2022"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# load packages
+```{r}
+library(phyloseq)
+library(tidyverse)
+library(tidyr)
+library(data.table)
+require(ggpubr)
+require(rstatix)
+library(wesanderson)
+library(cowplot)
+library(ggsci)
+library(rtk)
+library(factoextra)
+```
+```{r}
+getMyWesAndersonColor <- function(n, name) {
+  wesanderson::wes_palette(n, name = "GrandBudapest1",
+                           type = "continuous") }
+```
+# Read Metadata and Data 
+```{r, cache=TRUE, error=FALSE, results = "hide"}
+metadata <- vroom::vroom("data/Mastertable_from_Theda_exclude.csv", delim = ",")
+metadata <-as.data.frame(metadata)
+row.names(metadata) <-metadata$Sampl_ID
+metadata <- na.omit(metadata) 
+metadata$Swabsite[metadata$Swabsite == 0] <- "Vag_Swabs"
+metadata$Swabsite[metadata$Swabsite == 1] <- "Anal_Swabs"
+
+metadata$Treatment[metadata$Treatment == 0] <- "Control"
+metadata$Treatment[metadata$Treatment == 1] <- "Treatment"
+
+# seperate the PatID to easy merge in the new data 
+
+meta_Time <- read.table(file= "data/meta_Time.excluded_new.csv", sep = ",", header = T, row.names = 1)
+
+meta_Time <- meta_Time %>% 
+  unite(meta_Time, V1_:V4)
+
+meta_Time$meta_Time[meta_Time$meta_Time == "1_0_0_0"] <- "TP1"
+meta_Time$meta_Time[meta_Time$meta_Time == "0_1_0_0"] <- "TP2"
+meta_Time$meta_Time[meta_Time$meta_Time == "0_0_1_0"] <- "TP3"
+meta_Time$meta_Time[meta_Time$meta_Time == "0_0_0_1"] <- "TP4"
+
+meta_Time$Sampl_ID <- str_replace(meta_Time$Sampl_ID, "-", "." )
+meta_Time$Sampl_ID <- str_replace(meta_Time$Sampl_ID, "-", "." )
+
+row.names(meta_Time) <- meta_Time$Sampl_ID
+#write.table(metadata, file= "data/meta_time_excluded.csv", sep = ",", quote = F)
+
+
+Anal_Swabs <- meta_Time[meta_Time$Swabsite == "Anal_Swabs", ]
+Vag_Swabs <- meta_Time[meta_Time$Swabsite == "Vag_Swabs", ]
+
+##Color palette for collections ##
+pal.Coll<- c("#F8766D","#7CAE00","#00BFC4","#C77CFF")
+pal.Col2 <- c("#df9ed4", "#c93f55", "#eacc62", "#469d76", "#3c4b99", "#924099")
+```
+# Load 16S data, we want to rarefy vaginal and anal samples seperatly. There will be a huge diffrence between the species abundance in the samples due to the origin
+```{r error=FALSE, cache=TRUE, results=}
+biom_file <- import_biom("data/Lotus_output/IceCream_Lotus/OTU.biom", sep = "")
+OTUs <- as.data.frame(otu_table(biom_file)) # OTus in dataframe
+colnames(OTUs) <- sub("-", ".", colnames(OTUs))
+colnames(OTUs) <- sub("-", ".", colnames(OTUs))
+
+OTUs_vag <- OTUs[, colnames(OTUs) %in% rownames(ac.v)] #OTUs only Vaginaswabs
+OTUs_anal <- OTUs[, colnames(OTUs) %in% rownames(ac.a)] #OTUs only Analswabs
+OTUs_ice <- OTUs[, (c(ncol(OTUs)-3):ncol(OTUs))] # only the last 4 samples 
+
+# rarefy the two Swabsites sparatly
+samplesize_vag <- min(colSums(OTUs_vag))
+samplesize_anal <- min(colSums(OTUs_anal))
+
+
+rtk_OTU_vag <- rtk(OTUs_vag, repeats = 10, depth = samplesize_vag, ReturnMatrix = 1, margin = 2,
+               verbose = FALSE, threads = 1, tmpdir = NULL, seed = 0)
+save(rtk_OTU_vag, file ="~/Dropbox/Preterm_IceCream/R_script/20210317_data_cleanup/20210317_rtk_OTU_vag.r")
+
+rtk_OTU_anal <- rtk(OTUs_anal, repeats = 10, depth = samplesize_anal, ReturnMatrix = 1, margin = 2,
+                   verbose = FALSE, threads = 1, tmpdir = NULL, seed = 0)
+save(rtk_OTU_anal, file ="~/Dropbox/Preterm_IceCream/R_script/20210317_data_cleanup/20210317_rtk_OTU_anal.r")
+
+rtk_use_vag <- as.data.frame(rtk_OTU_vag$raremat)
+rtk_use_anal <- as.data.frame(rtk_OTU_anal$raremat)
+# binden 
+rtk_use_all <- merge(rtk_use_anal, rtk_use_vag, by = 0)
+row.names(rtk_use_all) <- rtk_use_all$Row.names
+rtk_use_all$Row.names <- NULL
+
+save(rtk_use_all, file ="~/Dropbox/Preterm_IceCream/R_script/20210317_data_cleanup/rtk_all_normalized_OTUs.r")
+```
+
+# Prepare the phyloseq object to process the analysis, this object will contain all the information needed for alpha and beta div.
+
+```{r, cache=TRUE, error=FALSE, results = "hide"}
+
+load("../../final.analysis/output/rtk_all_normalized_OTUs.r")
+otu <- otu_table(rtk_use_all, taxa_are_rows = T)  #check sample names
+##2) Use sample dataframe and transform it to "sample data" format
+
+sample<- sample_data(meta_Time)
+ 
+##Check which samples are not in the out matrix 
+setdiff(sample_names(sample), sample_names(otu))
+##3) Get Tax file 
+##
+tax <- tax_table(biom_file) #get tax from biom_file
+
+
+# save it all in a merged new phyloseq object 
+PS <- merge_phyloseq(otu, sample, tax)
+PS <- readRDS(file="../../final.analysis/output/PhyloSeqComp.Rds") ##Store Phyloseq for further analysis
+```
+
+
+
+
+# load data
+```{r}
+PS.t <- readRDS(file="output/new_PhyloSeqComp.time_excluded.Rds") ##Store Phyloseq for further analysis
+
+ac.v <- read.table("data/ac.v.tsv", sep = "\t", header = T, row.names = 1)
+ac.a <- read.table("data/ac.a.tsv", sep = "\t", header = T, row.names = 1)
+
+#meta_Time <- read.table(file= "data/meta_Time.excluded.csv", sep = ",", header = T)
+
+Vag_Swabs <- meta_Time[meta_Time$Swabsite == "Vag_Swabs", ]
+Ana_Swabs <- meta_Time[meta_Time$Swabsite == "Anal_Swabs", ]
+
+ac.v <- ac.v[ row.names(ac.v) %in% row.names(Vag_Swabs), ]
+ac.a <- ac.a[ row.names(ac.a) %in% row.names(Ana_Swabs), ]
+```
+# shannon and observed spec. div
+```{r}
+ac.v <- ac.v %>%
+  dplyr::filter(ac.v$meta_Time != "TP4") 
+
+ac.a <- ac.a %>%
+  dplyr::filter(ac.a$meta_Time != "TP4") 
+##Plot 
+
+
+ac.v$Shannon <-  as.numeric(ac.v$Shannon)
+ac.v%>% 
+  dplyr::group_by(Treatment)%>%
+  rstatix::wilcox_test(Shannon ~ meta_Time)%>%
+  rstatix::adjust_pvalue(method = "BH") %>%
+  rstatix::add_significance()%>%
+  rstatix::add_xy_position(x = "Treatment") -> stats_test
+
+ac.v%>%
+  #dplyr::group_by(Line)%>%
+  ggplot(aes(x = Treatment, y = Shannon, fill = meta_Time, colour = pal.Coll)) + geom_boxplot(color= "black", alpha = 0.9, outlier.shape = NA) + geom_point(position = position_jitter(0.2), size = 3, aes(fill = meta_Time,
+    color = meta_Time),  alpha = 0.8) + scale_fill_manual(values = wes_palette("GrandBudapest2")) + scale_color_manual(values = wes_palette("GrandBudapest2"))+
+  xlab("origine") + ylab("shannon index") + labs(tag = "A)") +
+  labs(caption = get_pwc_label(stats_test))+
+  theme_classic() +
+  theme(axis.text.x = element_text(size=16, angle= 90),
+        axis.text.y = element_text(size=16),
+        axis.title.y = element_text(size=16, face = "bold"),
+        axis.title.x = element_blank(),
+        legend.position = "right", 
+        legend.title = element_text(size=16), #change legend title font size
+        legend.text = element_text(size=14)) -> A
+A
+
+ac.v$Observed <-  as.numeric(ac.v$Observed)
+ac.v%>% 
+  dplyr::group_by(Treatment)%>%
+  rstatix::wilcox_test(Observed ~ meta_Time)%>%
+  rstatix::adjust_pvalue(method = "BH") %>%
+  rstatix::add_significance()%>%
+  rstatix::add_xy_position(x = "Treatment") -> stats_test
+
+##Plot 
+ac.v%>%
+  #dplyr::group_by(Line)%>%
+  ggplot(aes(x = Treatment, y = Observed, fill = meta_Time, colour = pal.Coll)) + geom_boxplot(color= "black", alpha = 0.9, outlier.shape = NA) + geom_point(position = position_jitter(0.2), size = 3, aes(fill = meta_Time,
+    color = meta_Time),  alpha = 0.8) + scale_fill_manual(values = wes_palette("GrandBudapest2")) + scale_color_manual(values = wes_palette("GrandBudapest2"))+
+  xlab("origine") + ylab("observed species") + labs(tag = "B)") + labs(caption = get_pwc_label(stats_test))+
+  theme_classic() +
+  theme(axis.text.x = element_text(size=16, angle= 90),
+        axis.text.y = element_text(size=16),
+        axis.title.y = element_text(size=16, face = "bold"),
+        axis.title.x = element_blank(),
+        legend.position = "right", 
+        legend.title = element_text(size=16), #change legend title font size
+        legend.text = element_text(size=14)) -> B
+B
+```
+## merge the two dataframes on the left the shannon as reference on the right the nmr on the left 
+```{r}
+library(rlang)
+cowplot::plot_grid(
+  A + theme(legend.position="none"),
+  B + theme(legend.position="none"),
+  align = 'vh',
+  hjust = -1,
+  nrow = 1
+) -> plotplot
+
+legend <- cowplot::get_legend(
+  # create some space to the left of the legend
+  A + theme(legend.box.margin = margin(0, 0, 0, 12))
+)
+cowplot::plot_grid(plotplot, legend, rel_widths = c(3, .4)) -> total.div.a
+
+ggsave(total.div.a, width = 11, height = 6, dpi = 300, device = "svg", filename = "figures/new.figures/new_shannon.div.vagina.svg")
+```
+
+# Look at the Beta diversity 
+```{r}
+load(file ="data/rtk_all_normalized_OTUs.r")
+otus <- rtk_use_all 
+otus <- otus [rowSums (otus) > 0,]
+otus <- t (otus) # carefule the icecream sampls are still included
+```
+
+
+```{r}
+# make principal coordinates
+pcoaE <- cmdscale (vegan::vegdist (otus, method = "bray", na.rm = T), k = 2)
+colnames(pcoaE) <- c("Dim1", "Dim2")
+# add Dim to metadata file
+meta <- merge(meta_Time, pcoaE, by = 0)
+row.names(meta) <- meta$Row.names
+meta$Row.names <- NULL
+
+kk.beta <- c("#FD6467","#5B1A18")
+
+# Bray-Curtis-Dis 
+# Beta-Div with centroids, colored for Swabsite in all samples together 
+centroids <- aggregate(cbind(Dim1,Dim2)~Swabsite,meta,mean)
+  
+meta %>%
+ggplot (aes (x = Dim1, y = Dim2, color = Swabsite)) +
+  theme_classic () + 
+  scale_color_manual(values = kk.beta) +
+  geom_point (aes (color = Swabsite), 
+              size = 3, alpha = 0.8) + 
+  xlab ("PCo 1") + ylab ("PCo 2")+ 
+  theme (axis.title.x = element_text (size = 13), 
+         axis.text.x = element_text (size = 13), 
+         axis.text.y = element_text (size = 13), 
+         axis.title.y = element_text (size = 13),
+         legend.position="bottom") +
+  stat_ellipse(aes(color = Swabsite)) + 
+  geom_point(data = centroids,
+             size = 5,
+             shape = 16,
+             color = "black") +# centroides hinzufügen
+  geom_point(data = centroids, 
+             size = 4, 
+             shape = 16) -> Bcluster
+
+
+# Add density plots
+meta %>%
+ggplot(aes(x = Dim1)) +
+  geom_density(alpha=.5, aes(fill = Swabsite,
+                             color = Swabsite)) +
+  scale_fill_manual(values= kk.beta) +
+  scale_color_manual(values=kk.beta) +
+  theme_classic() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.line.x = element_blank(),
+        #axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        #axis.line.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        legend.position="none") -> xdensity
+
+meta %>%
+ggplot(aes(Dim2)) +
+  geom_density(alpha=.5, aes(fill = Swabsite,
+                             color = Swabsite)) +
+  scale_fill_manual(values=kk.beta) +
+  scale_color_manual(values=kk.beta) +
+  theme_classic() +
+  theme(#axis.title.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    #axis.line.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.line.y = element_blank()) +
+  theme(legend.position = "none") +
+  coord_flip() -> ydensity
+
+
+# Create blank plot to use for combining beta + the two desity plots
+blankPlot <- ggplot()+geom_blank(aes(1,1))+
+  theme(
+    plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    panel.background = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line = element_blank()
+  )
+# bulid the final plot 
+Bpul <-
+  cowplot::plot_grid(
+    xdensity + theme(plot.margin = unit(c(0, 0, 0, 0), "cm")),
+    blankPlot + theme(plot.margin = unit(c(0, 0, 0, 0), "cm")),
+    Bcluster + theme(legend.position = "none", 
+              plot.margin = unit(c(0, 0, 0, 0), "cm")),
+    ydensity + theme(plot.margin = unit(c(0, 0, 0, 0), "cm")),
+    nrow = 2,
+    rel_widths = c(4, 1.4),
+    rel_heights = c(1.4, 4)
+  )
+Bpul
+
+ggsave(Bpul, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/new_beta.div.svg")
+
+```
+```{r}
+# PERMANOVA 
+otus <- otus[row.names(otus) %in% row.names(meta_Time), ]
+meta_Time <- meta_Time[row.names(meta_Time) %in% row.names(otus), ]
+s <- as.matrix(vegan::vegdist (otus, method = "bray", na.rm = T))
+permanova <- vegan::adonis(s ~ as.factor(Swabsite),data = meta_Time)
+
+permanova$aov.tab
+```
+
+
+# Mantel test correlation tests that determine the correlation between two matrices
+distance matrix (anal vs. vagina) smaller distance in the between anal swabs also similarity in the other?? 
+A significant Mantel test will tell you that the distances between samples in one matrix are correlated with the distances between samples in the other matrix. Therefore, as the distance between samples increases with respect to one matrix, the distances between the same samples also increases in the other matrix.
+# These tests can be used to address whether the environment is “selecting” for the microbial community, or if there is a strong distance decay pattern, suggesting dispersal limitation. These are important questions in studies of Microbial Biogeography
+```{r include=FALSE}
+library(vegan)
+library(geosphere)
+```
+Next load in your data with columns as OTUs/variables, and rows as samples.
+```{r}
+load(file ="data/rtk_all_normalized_OTUs.r")
+otu.mantel <- rtk_use_all %>%
+  drop_na()# these are just the otus
+otu.mantel <- as.data.frame(t(otu.mantel))
+
+mantel <- base::transform(merge(otu.mantel, meta, by =0), row.names = Row.names, Row.names = NULL)
+mantel.otu <- mantel[, c(1:4854)]
+envi.mantel <- as.data.frame(mantel$Swabsite)
+colnames(envi.mantel) <- c("Swabsite")
+envi.mantel <- fastDummies::dummy_cols(envi.mantel, select_columns = "Swabsite")
+envi.mantel$Swabsite <- NULL
+#abundance data frame - bray curtis dissimilarity
+dist.abund = vegan::vegdist(mantel.otu, method = "bray")
+
+#environmental vector - euclidean distance
+dist.envi = vegan::vegdist(envi.mantel, method = "bray") 
+
+# try the mantel test 
+#abundance vs environmental 
+abund_temp = vegan::mantel(dist.abund, dist.envi, method = "pearson", permutations = 9999, na.rm = TRUE)
+abund_temp
+# permutations. Mantel tests determine significance by permuting (randomizing) one matrix X number of times and observing the expected distribution of the statistic. I tend to pick a larger permutation number, but if computing power is low, feel free to decrease
+
+```
+From the results, I can see that the swabsite distance matrix has a strong relationship with the species Bray-Curtis dissimiliarity matrix (Mantel statistic R: 0.5974, p value = 1e-04). In other words, as samples become more dissimilar in swabsite , they also become more dissimilar in terms of microbial community composition.
+# lets show the mantel test a scatterplot 
+```{r}
+# Alternatively, if I was interested in the total effect of environmental parameters on my microbial community, I could combine all environmental parameters into one distance matrix and test the correlation of this matrix with my abundance data:
+#create environmental data frame 
+#make subset
+env = mantel[,c(4857:4860)]
+envi.mantel <- fastDummies::dummy_cols(env, select_columns = c("Swabsite","meta_Time", "Treatment", "compliance"))
+envi.mantel$Swabsite <- NULL
+envi.mantel$meta_Time <- NULL
+envi.mantel$Treatment <- NULL
+envi.mantel$compliance <- NULL
+
+#create distance matrix of scaled data
+dist.test = dist(envi.mantel, method = "euclidean")
+
+#run mantel test 
+abund.test = mantel(dist.abund, dist.test, method = "spearman", permutations = 9999, na.rm = TRUE)
+abund.test
+```
+
+# prepare genus table using the phyloseq object
+```{r}
+biom_file <- import_biom("data/Lotus_output/IceCream_Lotus/OTU.biom", sep = "")
+genus <- tax_glom(physeq = biom_file, taxrank = "Rank6")
+data_biom_all <- as.data.frame(tax_table(biom_file)) # still includes NA's
+data_biom_tax <- as.data.frame(tax_table(genus)) #biome dataframe mit taxa -> damit die zuordnung klappt beim mergen
+data_biom <-as.data.frame(otu_table(genus)) #biome datafram mit otu
+# umbennen der Ranks in phylum etc.
+colnames(data_biom_tax)<-c("kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+
+# genus_otu_short <- as.data.frame(otu_table(data_biom_tax))
+data_biom_tax$hash <- rownames(data_biom_tax)
+data_biom$hash <- rownames(data_biom)
+joined_genus <- left_join(data_biom_tax, data_biom)
+joined_genus$hash <- NULL
+
+fa.gen <- joined_genus[, - c(1:4,7) ]
+family <- joined_genus[, - c(1:4,6:7) ]
+phylum <- joined_genus[, - c(1, 3:7) ]
+genus <- joined_genus[, - c(1:5,7) ]
+
+fa.gen$Family <- sub("f__", "",fa.gen$Family)
+fa.gen$Genus <- sub("g__", "",genus$Genus)
+
+fa.gen$C = paste(fa.gen$Family, fa.gen$Genus, sep="_")
+rownames(fa.gen) <- make.names(fa.gen$C, unique = T)
+fa.gen$Family <- NULL
+fa.gen$Genus <- NULL
+fa.gen$C <- NULL
+fa.gen <- fa.gen[order(rownames(fa.gen)), ]
+colnames(fa.gen) <- sub("-", ".", colnames(fa.gen))
+colnames(fa.gen) <- sub("-", ".", colnames(fa.gen))
+fa.gen <- as.data.frame(t(fa.gen))
+# reduce the genus to the one where we have metadata
+fa.gen <- fa.gen[row.names(fa.gen) %in% row.names(meta_Time), ]
+write.table(fa.gen, file = "output/excluded_genus_data.tsv", sep = "\t", quote = F)
+```
+let check for the contribution to each dimentions ?
+check for contributions in dim anal and vag separatly do this with the genus 
+
+```{r}
+fa.gen_v <- fa.gen[, row.names(fa.gen) %in% row.names(Vag_Swabs) ]
+fa.gen_v <- fa.gen_v[ , which(apply(fa.gen_v, 2, var) != 0)]
+fa.gen_v <- fa.gen_v [rowSums (fa.gen_v) > 0,]
+# Dimension reduction using PCA
+res.fa.gen_v <- prcomp(fa.gen_v, scores = TRUE)
+
+
+princomp(fa.gen_v)$sdev^2   
+
+#Dim1
+PCA_contrib.1 <- res.fa.gen_v %>%
+  broom::tidy(matrix = "variables") %>%
+  dplyr::filter(PC == "1") %>%
+  slice_max(n=10, order_by = abs(value))
+
+PCA_contrib.1 %>%
+  mutate(column=fct_reorder(column, value)) %>%
+  ggplot(aes(x=value, y=column)) +
+  geom_segment(aes(x=value, xend=0, y=column, yend=column), color="black") +
+  geom_point(aes(size=3, color=value)) +
+  scale_color_gradient2 (low = "#0C4C00", high = "#65014B", mid = "white", midpoint = 0) +
+  theme_bw() +
+  geom_vline(xintercept = 0, linetype = 2, color="grey40") +
+  scale_x_continuous(labels = scales::percent) +
+  xlab("Contribution to PC1") +
+  ylab("Parameter") -> p1.con
+
+fa.gen_v <- fa.gen[, row.names(fa.gen) %in% row.names(Ana_Swabs) ]
+fa.gen_v <- fa.gen_v[ , which(apply(fa.gen_v, 2, var) != 0)]
+fa.gen_v <- fa.gen_v [rowSums (fa.gen_v) > 0,]
+# Dimension reduction using PCA
+res.fa.gen_v <- prcomp(fa.gen_v, scores = TRUE)
+
+#Dim1
+PCA_contrib.1 <- res.fa.gen_v %>%
+  broom::tidy(matrix = "variables") %>%
+  dplyr::filter(PC == "1") %>%
+  slice_max(n=10, order_by = abs(value))
+
+PCA_contrib.1 %>%
+  mutate(column=fct_reorder(column, value)) %>%
+  ggplot(aes(x=value, y=column)) +
+  geom_segment(aes(x=value, xend=0, y=column, yend=column), color="black") +
+  geom_point(aes(size=3, color=value)) +
+  scale_color_gradient2 (low = "#0C4C00", high = "#65014B", mid = "white", midpoint = 0) +
+  theme_bw() +
+  geom_vline(xintercept = 0, linetype = 2, color="grey40") +
+  scale_x_continuous(labels = scales::percent) +
+  xlab("Contribution to PC1") +
+  ylab("Parameter") -> p2.con
+p1.con
+```
+
+
+
+
+
+# Venn diagramm overlab 
+lets look at each timepoint for both vag and anal
+```{r}
+
+# control samples 
+control <- meta_Time %>%
+  dplyr::filter(Treatment == "Control")
+
+treatment <- meta_Time %>% 
+  dplyr::filter(Treatment == "Treatment")
+
+
+meta1 <- treatment %>%
+ dplyr::filter(meta_Time == "TP1")
+genus1 <- fa.gen[rownames(fa.gen) %in% rownames(meta1), ]
+
+meta2 <- treatment %>%
+ dplyr::filter(meta_Time == "TP2")
+genus2 <- fa.gen[rownames(fa.gen) %in% rownames(meta2), ]
+
+meta3 <- treatment %>%
+ dplyr::filter(meta_Time == "TP3")
+genus3 <- fa.gen[rownames(fa.gen) %in% rownames(meta3), ]
+```
+```{r}
+# TIMEPOINT 1 control
+meta1 %>%
+    group_by(Swabsite) %>% 
+    mutate(n = n()) %>% 
+    dplyr::mutate(Swabsite = as.factor(Swabsite),
+                  PatID = as.factor(PatID))
+meta1$side_name <- meta1$Swabsite
+meta1$side_name <- fct_relevel(meta1$side_name,  "Vag_Swabs", "Anal_Swabs")
+meta1$sample_identifier <- row.names(meta1)
+
+# TIMEPOINT 2
+meta2 %>%
+    group_by(Swabsite) %>% 
+    mutate(n = n()) %>% 
+    dplyr::mutate(Swabsite = as.factor(Swabsite),
+                  PatID = as.factor(PatID))
+meta2$side_name <- meta2$Swabsite
+meta2$side_name <- fct_relevel(meta2$side_name,  "Vag_Swabs", "Anal_Swabs")
+meta2$sample_identifier <- row.names(meta2)
+
+# TIMEPOINT 3
+meta3 %>%
+    group_by(Swabsite) %>% 
+    mutate(n = n()) %>% 
+    dplyr::mutate(Swabsite = as.factor(Swabsite),
+                  PatID = as.factor(PatID))
+meta3$side_name <- meta3$Swabsite
+meta3$side_name <- fct_relevel(meta3$side_name,  "Vag_Swabs", "Anal_Swabs")
+meta3$sample_identifier <- row.names(meta3)
+```
+# now do it for the species 
+```{r}
+# TIMEPOINT 1
+df.sp_wide <- as.data.frame(genus1)
+df.sp_wide$sample_identifier <- row.names(df.sp_wide) 
+
+df.sp_relAb_long <- df.sp_wide %>% 
+  pivot_longer(-sample_identifier) %>% 
+  group_by(sample_identifier) %>% 
+  mutate(summed_value = sum(value)) %>% 
+  dplyr::mutate(relAb = value/summed_value) %>% 
+  dplyr::select(sample_identifier, name, relAb) 
+
+df.sp_relAb_wide <- df.sp_relAb_long %>% 
+  tidyr::pivot_wider(names_from = name, values_from = relAb)
+
+# TIMEPOINT 2
+df.sp_wide2 <- as.data.frame(genus2)
+df.sp_wide2$sample_identifier <- row.names(df.sp_wide2) 
+
+df.sp_relAb_long2 <- df.sp_wide2 %>% 
+  pivot_longer(-sample_identifier) %>% 
+  group_by(sample_identifier) %>% 
+  mutate(summed_value = sum(value)) %>% 
+  dplyr::mutate(relAb = value/summed_value) %>% 
+  dplyr::select(sample_identifier, name, relAb) 
+
+df.sp_relAb_wide2 <- df.sp_relAb_long2 %>% 
+  tidyr::pivot_wider(names_from = name, values_from = relAb)
+
+# TIMEPOINT 3
+df.sp_wide3 <- as.data.frame(genus3)
+df.sp_wide3$sample_identifier <- row.names(df.sp_wide3) 
+
+df.sp_relAb_long3 <- df.sp_wide3 %>% 
+  pivot_longer(-sample_identifier) %>% 
+  group_by(sample_identifier) %>% 
+  mutate(summed_value = sum(value)) %>% 
+  dplyr::mutate(relAb = value/summed_value) %>% 
+  dplyr::select(sample_identifier, name, relAb) 
+
+df.sp_relAb_wide3 <- df.sp_relAb_long3 %>% 
+  tidyr::pivot_wider(names_from = name, values_from = relAb)
+```
+# more to do with the metadata
+```{r}
+library(tidyverse)
+library(magrittr)
+# TIMEPOINT 1
+meta1 %<>% 
+  dplyr::mutate(order_to_plot = case_when(side_name == "Vag_Swabs" ~ 1,
+                                          side_name == "Anal_Swabs" ~ 2),
+                segments_va_ana = case_when(Swabsite == "Vag_Swabs" ~ "1",
+                                           Swabsite == "Anal_Swabs" ~ "2"))
+
+# TIMEPOINT 2
+meta2 %<>% 
+  dplyr::mutate(order_to_plot = case_when(side_name == "Vag_Swabs" ~ 1,
+                                          side_name == "Anal_Swabs" ~ 2),
+                segments_va_ana = case_when(Swabsite == "Vag_Swabs" ~ "1",
+                                           Swabsite == "Anal_Swabs" ~ "2"))
+
+# TIMEPOINT 3
+meta3 %<>% 
+  dplyr::mutate(order_to_plot = case_when(side_name == "Vag_Swabs" ~ 1,
+                                          side_name == "Anal_Swabs" ~ 2),
+                segments_va_ana = case_when(Swabsite == "Vag_Swabs" ~ "1",
+                                           Swabsite == "Anal_Swabs" ~ "2"))
+```
+```{r include=FALSE}
+
+kk.all <- c("#FD6467","#5B1A18", "#FAEFD1")
+```
+```{r eval=FALSE, include=FALSE}
+library(tidyverse)
+huh <- df.sp_relAb_long %>% 
+  ungroup() %>% 
+  dplyr::inner_join(., meta1) %>% 
+  group_by(side_name, name) %>% 
+  summarise(relAb_avg = mean(relAb)) %>% 
+  dplyr::filter(relAb_avg != 0) %>% 
+  tidyr::pivot_wider(names_from = name, 
+                     values_from = relAb_avg) %>%
+  select_if(~ !any(is.na(.))) %>% 
+  tidyr::pivot_longer(-side_name, 
+                      values_to = "relAb")
+
+huh %>% ungroup() %>% mutate(name = as.factor(name)) %>% distinct(name)
+
+huh %>% 
+  summarise(yar = sum(relAb))
+```
+```{r eval=FALSE, include=FALSE}
+ boxplot <- huh %>%
+  group_by(side_name) %>% 
+   # summarise(yar = sum(relAb))
+  ggplot(aes(
+    x = (side_name),
+    y = relAb,
+    fill = name
+  )) +
+  geom_bar(stat = "identity", position = "stack") +
+  ggthemes::theme_few() +
+  theme(legend.position = "none")+
+  # ggtitle(paste0("At the ", name, " level")) +
+  xlab("") +
+  ylab("Relative Abundance") +
+  guides() +
+  scale_fill_manual(values = getMyWesAndersonColor(238))
+```
+# function to get only the names of the genus present in a certain segment
+```{r}
+library(tidyverse)
+### function to get only the names of the sp present in a certain segment ###
+  x <- df.sp_relAb_long3 %>% 
+  ungroup() %>% 
+  dplyr::inner_join(., meta3) %>%
+  group_by(segments_va_ana, name) %>%
+  summarise(relAb_avg = mean(relAb)) %>%
+  dplyr::filter(relAb_avg != 0) %>%
+  tidyr::pivot_wider(names_from = name,
+                     values_from = relAb_avg) %>%
+  tidyr::pivot_longer(-segments_va_ana,
+                      values_to = "relAb") %>%
+  ungroup()
+
+ 
+  y <- x %>% 
+  filter( !is.na(relAb)) 
+```
+
+```{r}
+# how do build a list 
+# save(list, file = "../list.r")
+# save(list1, file = "../list1.r")
+# save(list2, file = "../list2.r")
+# save(list3, file = "../list3.r")
+
+
+list3 <- list( "vagina"  = subset( y[, c(1,2)], segments_va_ana == 1)$name, "anal"  = subset( y[, c(1,2)], segments_va_ana == 2)$name)
+
+# which genus are specific for each segment Day 1
+newdata_vag1 <- setdiff(list1$vagina, list1$anal)
+newdata_ana1 <- setdiff(list1$anal, list1$vagina)
+
+# which genus are specific for each segment Day 2
+newdata_vag2 <- setdiff(list2$vagina, list2$anal)
+newdata_ana2 <- setdiff(list2$anal, list2$vagina)
+
+# which genus are specific for each segment Day 3
+newdata_vag3 <- setdiff(list3$vagina, list3$anal)
+newdata_ana3 <- setdiff(list3$anal, list3$vagina)
+```
+```{r}
+kay3 <- plot(eulerr::euler(list3), quantities = TRUE)
+fit2 <- eulerr::euler(list3)
+eulerr::error_plot(fit2)
+
+# Remove fills, vary borders, display quantities, and switch font.
+venn1 <- plot(fit2,
+     quantities = TRUE,
+     fill = kk.all,
+     lty = 1:3,
+     labels = list(font = 4)) 
+# 238 same genus between vag and anal swabs
+
+venn2 <- plot(fit2,
+     quantities = TRUE,
+     fill = kk.all,
+     lty = 1:3,
+     labels = list(font = 4)) 
+# 186 same genus between vag and anal swabs
+
+venn3 <- plot(fit2,
+     quantities = TRUE,
+     fill = kk.all,
+     lty = 1:3,
+     labels = list(font = 4)) 
+# 166 same genus between vag and anal swabs
+
+```
+```{r}
+cowplot::plot_grid(
+  venn1,
+  venn2,
+  venn3,
+  align = 'vh',
+  labels = c('timepoint 1', 'timepoint 2', 'timepoint 3')) -> vennvenn
+
+  # create some space to the left of the legend
+title <- ggdraw() + 
+  draw_label(
+    "Microbiota overlab treatment vaginal vs. anal swabs",
+    fontface = 'bold',
+    x = 0,
+    hjust = 0
+  ) +
+  theme(
+    # add margin on the left of the drawing canvas,
+    # so title is aligned with left edge of first plot
+    plot.margin = margin(0, 0, 0, 7)
+  )
+plot_grid(
+  title, vennvenn,
+  ncol = 1,
+  # rel_heights values control vertical title margins
+  rel_heights = c(0.1, 1)
+) -> vennnn
+```
+

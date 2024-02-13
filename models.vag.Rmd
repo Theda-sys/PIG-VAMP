@@ -1,0 +1,618 @@
+---
+title: "models"
+author: "Theda Bartolomaeus"
+date: "9/24/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# AIM
+to deep dive into the viginal - and anal-Swab microbiota and to analyse its unique ecosystem in terms of changes during pregnancy. road map: Enterotyping of the AS and VS micobiota on baseline Side by side (AS, VS) changes over the time during pregnancy (alpha & beta div) sec. hypotheses: dose lactobacillus treatment changes anything?
+Check for the overlab between anal and vaginal swabs
+- Prevotella (in all its forms so incl. Alloprevotella, Paraprevotella etc.), Sneathia amnii, Atopobium vaginae, Gardnerella vaginalis, ureaplasma and mycoplasma
+
+# load packages 
+```{r}
+library(phyloseq)
+library(tidyverse)
+library(tidyr)
+library(data.table)
+require(ggpubr)
+require(rstatix)
+library(wesanderson)
+library(cowplot)
+library(ggsci)
+library(rtk)
+```
+
+# read metadata, data, and create color palette
+```{r}
+# metadata
+metadata <- vroom::vroom("data/Mastertable from Theda.csv", delim = ",")
+# 16S data, max level of resolution is genus!
+biom_file <- import_biom("data/Lotus_output/IceCream_Lotus/OTU.biom", sep = "")
+getMyWesAndersonColor <- function(n, name) {
+  wesanderson::wes_palette(n, name = "Darjeeling1",
+                           type = "continuous") }
+```
+We will modify the metadata and create additionally metadata.files for the Timepoint
+```{r}
+metadata <- as.data.frame(metadata)
+metadata$Sampl_ID <- str_replace(metadata$Sampl_ID, "-", "." )
+metadata$Sampl_ID <- str_replace(metadata$Sampl_ID, "-", "." )
+row.names(metadata) <-metadata$Sampl_ID
+#The V1 visite is a Baseline measurement -> no intervention here! I decieded to control for 
+# first i will remove TP1
+row.names(metadata) <-metadata$Sampl_ID
+metadata$Swabsite[metadata$Swabsite == 0] <- "Vag_Swabs"
+metadata$Swabsite[metadata$Swabsite == 1] <- "Anal_Swabs"
+
+metadata$Treatment[metadata$Treatment == 0] <- "Control"
+metadata$Treatment[metadata$Treatment == 1] <- "Treatment"
+
+
+meta_Time <- metadata
+meta_Time <- meta_Time %>% 
+  unite(meta_Time, V1_:V4)
+
+meta_Time$meta_Time[meta_Time$meta_Time == "1_0_0_0"] <- "TP1"
+meta_Time$meta_Time[meta_Time$meta_Time == "0_1_0_0"] <- "TP2"
+meta_Time$meta_Time[meta_Time$meta_Time == "0_0_1_0"] <- "TP3"
+meta_Time$meta_Time[meta_Time$meta_Time == "0_0_0_1"] <- "TP4"
+# meta_Time$meta_Time <- factor(meta_Time$meta_Time, levels=c('TP1', "TP2", "TP3", 'TP4')) # factories the timepoints
+
+write.table(meta_Time, file= "data/meta_Time.csv", sep = ",", quote =F)
+
+m12 <- read.table(file = "data/m12.csv", sep = ",", header = T, row.names = 1)
+m13 <- read.table(file = "data/m13.csv", sep = ",", header = T, row.names = 1)
+m23 <- read.table(file = "data/m23.csv", sep = ",", header = T, row.names = 1)
+
+
+
+Vag_Swabs1 <- m12[m12$Swabsite == "Vag_Swabs", ]
+Vag_Swabs2 <- m23[m23$Swabsite == "Vag_Swabs", ]
+Vag_Swabs3 <- m13[m13$Swabsite == "Vag_Swabs", ]
+
+Vag_Swabs <- meta_Time[meta_Time$Swabsite == "Vag_Swabs", ]
+
+Anal_Swabs <- meta_Time[meta_Time$Swabsite == "Anal_Swabs", ]
+
+
+```
+# I will create dummy varibales T1 vs. T2, T2 vs. T3, T1 vs. T3
+```{r}
+
+
+```
+
+
+
+# 16S processing
+we want to rarefy vaginal and anal samples seperatly. There will be a huge diffrence between the species abundance in the samples due to the origin
+```{r}
+OTUs <- as.data.frame(otu_table(biom_file)) # OTus in dataframe
+OTUs <- as.data.frame(t(OTUs))
+row.names(OTUs) <- str_replace(row.names(OTUs), "-", "." )
+row.names(OTUs) <- str_replace(row.names(OTUs), "-", "." )
+#OTUs only Vaginaswabs
+OTUs_vag <- OTUs[row.names(OTUs) %in% rownames(Vag_Swabs),]
+OTUs_vag <- as.data.frame(t(OTUs_vag))
+#OTUs only Analswabs
+OTUs_anal <- OTUs[row.names(OTUs) %in% rownames(Anal_Swabs), ]
+OTUs_anal <- as.data.frame(t(OTUs_anal))
+
+OTUs_ice <- OTUs[, (c(nrow(OTUs)-3):nrow(OTUs))] # only the last 4 samples 
+
+# rarefy the two Swabsites sparatly
+samplesize_vag <- min(colSums(OTUs_vag)) # 16230 reads
+samplesize_anal <- min(colSums(OTUs_anal)) # 16560 reads
+
+
+rtk_OTU_vag <- rtk(OTUs_vag, repeats = 10, depth = samplesize_vag, ReturnMatrix = 1, margin = 2,
+               verbose = FALSE, threads = 1, tmpdir = NULL, seed = 0)
+# save(rtk_OTU_vag, file ="output/22715_rtk_OTU_vag.r")
+
+rtk_OTU_anal <- rtk(OTUs_anal, repeats = 10, depth = samplesize_anal, ReturnMatrix = 1, margin = 2,
+                   verbose = FALSE, threads = 1, tmpdir = NULL, seed = 0)
+# save(rtk_OTU_anal, file ="output/22715_rtk_OTU_anal.r")
+
+rtk_use_vag <- as.data.frame(rtk_OTU_vag$raremat)
+rtk_use_anal <- as.data.frame(rtk_OTU_anal$raremat)
+# binden 
+rtk_use_all <- merge(rtk_use_anal, rtk_use_vag, by = 0)
+row.names(rtk_use_all) <- rtk_use_all$Row.names
+rtk_use_all$Row.names <- NULL
+# load(file ="data/rtk_all_normalized_OTUs.r")
+meta_Time <- meta_Time[row.names(meta_Time) %in% colnames(rtk_use_all), ]
+# save(meta_Time, file ="data/meta_Time.r" )
+```
+
+# prepare phyloseq object to make the handling easier and densen the information
+this object will contain all the information needed to compute alpha and beta div.
+```{r}
+otu <- otu_table(rtk_use_all, taxa_are_rows = T)  #check sample 
+##2) Use sample dataframe and transform it to "sample data" format
+sample<- sample_data(meta_Time)
+ 
+##Check which samples are not in the out matrix 
+setdiff(sample_names(sample), sample_names(otu))
+##3) Get Tax file 
+##
+tax <- tax_table(biom_file) #get tax from biom_file
+# save it all in a merged new phyloseq object 
+PS.t <- merge_phyloseq(otu, sample, tax)
+# saveRDS(PS.t, file="output/PhyloSeqComp.time.Rds") ##Store Phyloseq for further analysis
+```
+# Alpha and Beta div.
+we have repeated measurements, even an interaction term (Treatment/time) <- not sure, will test 
+
+```{r}
+# get alphadiv estimate
+alphadiv<- estimate_richness(PS.t)
+alphadiv$Sampl_ID <- row.names(alphadiv)
+# subselet different indices pf interested
+alphadiv%>%
+  dplyr::select(Observed, Chao1, Shannon) -> alphadiv
+
+# comparison 1 vs. 2
+alphadiv.1 <- merge(alphadiv, Vag_Swabs1, by = 0)
+rownames(alphadiv.1)<- alphadiv.1$Row.names
+alphadiv.1$Row.names<- NULL
+
+# comparison 2 vs. 3
+alphadiv.2 <- merge(alphadiv, Vag_Swabs2, by = 0)
+rownames(alphadiv.2)<- alphadiv.2$Row.names
+alphadiv.2$Row.names<- NULL
+
+# comparison 1 vs. 3
+alphadiv.3 <- merge(alphadiv, Vag_Swabs3, by = 0)
+rownames(alphadiv.3)<- alphadiv.3$Row.names
+alphadiv.3$Row.names<- NULL
+
+
+# somehow there are NAs for the treatment, however when looking into compliance it says these are controls, so i will change that manually
+alphadiv.1$Treatment[is.na(alphadiv.1$Treatment)] <- "Control"
+alphadiv.2$Treatment[is.na(alphadiv.2$Treatment)] <- "Control"
+alphadiv.2$Treatment[is.na(alphadiv.2$Treatment)] <- "Control"
+# alphadiv <- na.omit(alphadiv) # <- here we get significance sofia suggested to keep removing
+
+# # now we have the indeces for all samples - I would proceed in splitting the dataset according to origin
+# ac.v <- subset(alphadiv, Swabsite == "Vag_Swabs", select = c(1:31))
+# #write.table(ac.v, file = "data/ac.v.tsv", sep = "\t", quote = F)
+# ac.a <- subset(alphadiv, Swabsite == "Anal_Swabs", select = c(1:31))
+# #write.table(ac.a, file = "data/ac.a.tsv", sep = "\t", quote = F)
+```
+## lineare mixed effect models
+# Shannon div - alpha diversity index
+to check the effect of time on each individuum - here we are just looking at the vagina set 
+Question: dose the treatment have an effect on the alpha div? 
+
+```{r}
+# first we need to transfer into long format 
+ac.v <- ac.v %>%
+  dplyr::filter(ac.v$meta_Time != "TP4")
+ac.v <- ac.v %>%
+  dplyr::filter(ac.v$meta_Time != "TP1")
+# remove TP4 since we have only one datapoint there
+ac.v$Treatment[is.na(ac.v$Treatment)] <- "Control"
+ac.v$Treatment <- as.factor(ac.v$Treatment)
+ac.v$Treatment <- fct_relevel(ac.v$Treatment, "Control", "Treatment")
+
+#Time should not be as factor! this should be numeric! best would be days since inclusion 
+#ac.v$meta_Time[ac.v$meta_Time == "TP1"] <- "1"
+ac.v$meta_Time[ac.v$meta_Time == "TP2"] <- "0"
+ac.v$meta_Time[ac.v$meta_Time == "TP3"] <- "1"
+
+#ac.v$meta_Time <- as.numeric(ac.v$meta_Time)
+ac.v$Age_at_inclusion <- as.numeric(ac.v$Age_at_inclusion)
+ac.v$PatID <- as.factor(ac.v$PatID)
+ac.v$Swabsite <- as.factor(ac.v$Swabsite)
+ac.v$Previous_preterm_birth_Yes1_No0_and_GA <- as.factor(ac.v$Previous_preterm_birth_Yes1_No0_and_GA)
+ac.v$compliance <- as.factor(ac.v$compliance)
+ac.v$compliance <- fct_relevel(ac.v$compliance, "control", "none", "poor", "good", "excellent")
+# here i will put none and poor into control and good and excellent into complied 
+# ac.v$compliance[ac.v$compliance == "none"] <- "control"
+# ac.v$compliance[ac.v$compliance == "poor"] <- "control"
+# ac.v$compliance[ac.v$compliance == "good"] <- "complied"
+# ac.v$compliance[ac.v$compliance == "excellent"] <- "complied"
+ac.v$Spontaneous_1_Induced_birth_0 <- as.factor(ac.v$Spontaneous_1_Induced_birth_0)
+
+ac.v.l <- ac.v %>%
+  reshape2::melt(id.vars=c("Sampl_ID", "PatID", "meta_Time", "Treatment", "BMI", "Age_at_inclusion", "Previous_preterm_birth_Yes1_No0_and_GA", "Spontaneous_1_Induced_birth_0", "compliance"), measure.vars=c("Shannon"))
+```
+
+Plot each patient seperatly
+```{r}
+# check for each individuum seperatly
+kk.beta <- c("#16317d","#b86092") # here we are selecting colors defining treatment and control 
+ggplot(ac.v.l,
+       aes(x = meta_Time, y = value, color = Treatment,
+group = PatID))+ geom_line()+
+geom_point()+ facet_wrap(~PatID, labeller = "label_both")+ theme_bw()+
+scale_color_manual(values = kk.beta)+
+  ylab("Microbiome richness (Shannon index)")+
+  xlab("timepoint")-> p2
+p2
+# might be interessting Pat: 1, 19, 39 and 5 <- check for complaience
+# # none of them hat preterm birth ionteretsing finding
+```
+
+
+```{r}
+# age also as random effect
+model.ob <- lmerTest::lmer(value ~ meta_Time + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:meta_Time, data = ac.v.l, REML = T)
+summary(model.ob) 
+```
+
+After building a linear mixed model, I wanted to do post-hoc test to compare treatment and control at the different timepoints
+```{r}
+
+# age also as random effect
+model.ob <- lmerTest::lmer(value ~ meta_Time + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI +  Treatment:meta_Time, data = ac.v.l)
+# age also as random effect
+model.ob.time <- lmerTest::lmer(value ~ meta_Time + (1 | PatID)+(1 | Age_at_inclusion)   + BMI + Treatment:meta_Time, data = ac.v.l)
+# age also as random effect
+model.ob.treamtne <- lmerTest::lmer(value ~  Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:meta_Time, data = ac.v.l)
+
+# vergleiche die models
+
+lmtest::lrtest(model.ob, model.ob.time)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+lmtest::lrtest(model.ob, model.ob.treamtne)$'Pr(>Chisq)' #1 das bedeutte time hat auch keinen effect
+```
+
+
+After building a linear mixed model, I wanted to do post-hoc test to compare treatment and control at the different timepoints
+```{r eval=FALSE, include=FALSE}
+# this method is only working, when having time as factor 
+library(emmeans)
+# m.emm <- emmeans(model.ob, "Treatment", "meta_Time")
+# p.adjust.1 <- contrast(m.emm, adjust = "fdr", "trt.vs.ctrl")
+# p.adjust.1
+
+emm <- emmeans::emmeans(model.ob, pairwise ~ Treatment | meta_Time)
+p.adjust.1 <- contrast(emm[[1]], "trt.vs.ctrl") 
+# pairwise adjusting 
+# The default multiplicity adjustment method is "tukey"
+p.adjust.1 # no significant difference between Treatment - Control 
+```
+
+The ggeffects package computes estimated marginal means (predicted values) for the response. Visualize predictions from the multiple regression models.
+```{r}
+dat <- ggeffects::ggpredict(model.ob, c("meta_Time", "Treatment [Control,Treatment]"))
+dat <- plot(dat, add.data = T)
+dat + scale_color_manual(values = kk.beta)+
+  ylab("Microbiome richness \n (Shannon index)")+
+  xlab("timepoint")+
+  theme (axis.title.x = element_text (size = 13), 
+         axis.text.x = element_text (size = 13), 
+         axis.text.y = element_text (size = 13), 
+         axis.title.y = element_text (size = 13))+
+  ggtitle("Predicted Shannon index of \n Treatment vs. Control") -> plot
+ggsave(plot, width = 4, height = 3, dpi = 300, device = "svg", filename = "shannon.predict.svg") # harte streuung der daten 
+```
+# look at the effect size 
+Calculate effect size crohn d
+
+```{r}
+# Effect size Treatment yes/no -> Cliffs Delta
+# Effect size meta_Time - > geht nicht so, aber wir können jeden Zeitpunkt separat
+source("~/Documents/Preterm_IceCream/final.analysis/Cliff_d.R")
+# x: value
+# y: feature i want to test 
+control <- ac.v.l$value[ac.v.l$Treatment == "Control"]
+treatment <- ac.v.l$value[ac.v.l$Treatment == "Treatment"]
+cliffs <- CliffsDelta(control, treatment) # 0.2424242
+
+## pairwise 
+# x: value
+# y: feature i want to test 
+#sub.1 <- ac.v.l[ac.v.l$meta_Time == "0", ]
+sub.2 <- ac.v.l[ac.v.l$meta_Time == "0", ]
+sub.3 <- ac.v.l[ac.v.l$meta_Time == "1", ]
+
+control.1 <- sub.1$value[sub.1$Treatment == "Control"]
+treatment.1 <- sub.1$value[sub.1$Treatment == "Treatment"]
+CliffsDelta(control.1, treatment.1) # 0.1287879
+
+control.2 <- sub.2$value[sub.2$Treatment == "Control"]
+treatment.2 <- sub.2$value[sub.2$Treatment == "Treatment"]
+CliffsDelta(control.2, treatment.2) # 0.3333333
+# its acutally a big effect size, however the variance in out data ist to big. 
+wilcox.test(control.2, treatment.2) # check once again for statistic signficance
+
+control.3 <- sub.3$value[sub.3$Treatment == "Control"]
+treatment.3<- sub.3$value[sub.3$Treatment == "Treatment"]
+CliffsDelta(control.3, treatment.3) # 0.1190476
+```
+
+# Genus level models
+extract the genus level from the phyloseq object 
+```{r}
+genus <- tax_glom(physeq = PS.t, taxrank = "Rank6")
+data_biom_all <- as.data.frame(tax_table(PS.t)) # still includes NA's
+data_biom_tax <- as.data.frame(tax_table(genus)) #biome dataframe mit taxa -> damit die zuordnung klappt beim mergen
+data_biom <-as.data.frame(otu_table(genus)) #biome datafram mit otu
+# umbennen der Ranks in phylum etc.
+colnames(data_biom_tax)<-c("kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+
+# genus_otu_short <- as.data.frame(otu_table(data_biom_tax))
+data_biom_tax$hash <- rownames(data_biom_tax)
+data_biom$hash <- rownames(data_biom)
+joined_genus <- left_join(data_biom_tax, data_biom)
+joined_genus$hash <- NULL
+
+# I will prepare a new coloum of names combining phylum and genus
+genus <- joined_genus[, - c(1:5,7) ]
+phylum <- joined_genus[, - c(1, 3:7) ]
+ph.gen <- joined_genus[, -c(1, 3:5,7)]
+ph.gen$Genus <- sub("g__", "",ph.gen$Genus)
+ph.gen$Phylum <- sub("p__", "",ph.gen$Phylum)
+ph.gen$C = paste(ph.gen$Phylum, ph.gen$Genus, sep="_")
+rownames(ph.gen) <- make.names(ph.gen$C, unique = T)
+ph.gen$Genus <- NULL
+ph.gen$Phylum <- NULL
+ph.gen$C <- NULL
+ph.gen <- ph.gen[order(rownames(ph.gen)), ]
+ph.gen <- as.data.frame(t(ph.gen))
+```
+# now we merge metadata and genus table 
+
+```{r}
+# i need to remove a bunch of bacteria since we have only 0 abundances there 
+gen.red <- ph.gen %>%
+  select((c("Bacteroidetes_Prevotella.6", "Bacteroidetes_Prevotella.9","Bacteroidetes_Prevotella", "Actinobacteria_Gardnerella", "Actinobacteria_Atopobium", "Fusobacteria_Sneathia", "Tenericutes_Ureaplasma", "Tenericutes_Mycoplasma", "Firmicutes_Lactobacillus")))
+```
+
+```{r}
+mo.gen <- merge(gen.red, meta_Time, by = 0)
+row.names(mo.gen) <- mo.gen$Row.names
+mo.gen$Row.names <- NULL
+mo.gen$Treatment[is.na(mo.gen$Treatment)] <- "Control"
+# one more time make sure everything is annotated correct for the model
+mo.gen <- mo.gen %>%
+  dplyr::filter(mo.gen$meta_Time != "TP4") # remove TP4 since we have only one datapoint there
+
+
+# mo.gen$meta_Time <- as.factor(mo.gen$meta_Time)
+# mo.gen$meta_Time <- fct_relevel(mo.gen$meta_Time, "TP1", "TP2", "TP3")
+
+mo.gen$Age_at_inclusion <- as.numeric(mo.gen$Age_at_inclusion)
+mo.gen$PatID <- as.factor(mo.gen$PatID)
+mo.gen$Swabsite <- as.factor(mo.gen$Swabsite)
+mo.gen$Previous_preterm_birth_Yes1_No0_and_GA <- as.factor(mo.gen$Previous_preterm_birth_Yes1_No0_and_GA)
+mo.gen$compliance <- as.factor(mo.gen$compliance)
+mo.gen$compliance <- fct_relevel(mo.gen$compliance, "control", "none", "poor", "good", "excellent")
+mo.gen$Spontaneous_1_Induced_birth_0 <- as.factor(mo.gen$Spontaneous_1_Induced_birth_0)
+# save(mo.gen, file = "mo.gen.all.r")
+
+# subset to vagina
+mo.gen.v <- subset(mo.gen, Swabsite == "Vag_Swabs", select = c(1:37))
+mo.gen.v <- mo.gen.v[, c(1:16,19, 21, 27, 30)]
+mo.gen.v$Swabsite <-NULL
+```
+
+```{r include=FALSE}
+# check for each individuum seperatly
+kk.beta <- c("#16317d","#b86092") # here we are selecting colors defining treatment and control 
+
+
+plo <- list()    
+
+for (i in 1:9){
+plo[[i]] <- ggplot(mo.gen.v,
+       aes(x = meta_Time, y = mo.gen.v[ , i], color = Treatment,
+group = PatID))+ geom_line()+
+geom_point()+ facet_wrap(~PatID, labeller = "label_both")+ theme_bw()+
+scale_color_manual(values = kk.beta)+
+  xlab("timepoint")+
+  theme(axis.title.x = element_blank())+
+  ylab(colnames(mo.gen.v)[i])
+}
+### Use your plot_list here:
+glist <- cowplot::plot_grid(plo[[1]], plo[[2]], plo[[3]], plo[[4]])
+ggsave(glist, width = 17, height = 12, dpi = 300, device = "svg", filename = "figures/new.figures/each_patient/bacteria.patient.svg")
+
+glist1 <- cowplot::plot_grid(plo[[5]], plo[[6]], plo[[7]], plo[[8]])
+ggsave(glist1, width = 17, height = 12, dpi = 300, device = "svg", filename = "figures/new.figures/each_patient/bacteria.patient1.svg")
+
+ggsave(plo[[9]], width = 5, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/each_patient/bacteria.patient2.svg")
+```
+
+
+```{r}
+mo.gen.v %>%
+  reshape2::melt(id.vars=c("Sampl_ID", "PatID", "meta_Time", "Treatment", "BMI", "Age_at_inclusion", "Previous_preterm_birth_Yes1_No0_and_GA", "Spontaneous_1_Induced_birth_0", "compliance", "Antibiotics_during_pregnancy_Yes1_No0")) -> mo.gen.v.all
+mo.gen.v.all$value <- as.numeric(mo.gen.v.all$value)
+```
+# loop
+loop through the whole data set and build models
+
+```{r}
+library(lmerTest)
+# loop the variables
+groups <- unique(mo.gen.v.all$variable)
+mod <- list()    
+Beta_0 <- rep(0, length(groups))
+Beta_1 <- rep(0, length(groups))
+
+for (i in seq_along(groups)){
+mod[[i]] <- lmer(value ~ meta_Time + Treatment + (1 | PatID) + (1 | Age_at_inclusion) + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:meta_Time, data = mo.gen.v.all, REML = T, subset = variable == groups[i])
+}
+summary(mod[[9]])
+save(mod, file = "data/mod.all.new.r")
+```
+After building a linear mixed model, I wanted to do post-hoc test to compare treatment and control at the different timepoints
+```{r}
+
+m.all <- list()
+m.time <- list()
+m.treatment <- list()
+p.time <- list()
+p.treatment <- list()
+
+for (i in 1:length(mod)){
+m.all[i] <- lmerTest::lmer(value ~ meta_Time + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:meta_Time, data = mo.gen.v.all)
+
+m.time[i] <- lmerTest::lmer(value ~ meta_Time + (1 | PatID)+(1 | Age_at_inclusion)   + BMI + Antibiotics_during_pregnancy_Yes1_No0 +Treatment:meta_Time, data = mo.gen.v.all)
+
+m.treatment[i] <- lmerTest::lmer(value ~  Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI +Antibiotics_during_pregnancy_Yes1_No0 + Treatment:meta_Time, data = mo.gen.v.all) 
+}
+
+
+## Bacteroidetes_Prevotella.6 ##
+Bacteroidetes_Prevotella.6.all <- m.all[[1]]
+Bacteroidetes_Prevotella.6.time <- m.time[[1]]
+Bacteroidetes_Prevotella.6.treatment <- m.treatment[[1]]
+
+# vergleiche die models
+p.treatment.Bacteroidetes_Prevotella.6 <-lmtest::lrtest(Bacteroidetes_Prevotella.6.all, Bacteroidetes_Prevotella.6.time)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella.6 <-lmtest::lrtest(Bacteroidetes_Prevotella.6.all, Bacteroidetes_Prevotella.6.treatment)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+## Bacteroidetes_Prevotella.9 ##
+p.treatment.Bacteroidetes_Prevotella.9 <-lmtest::lrtest( m.all[[2]], m.time[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella.9 <-lmtest::lrtest(m.all[[2]], m.treatment[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+## Bacteroidetes_Prevotella ##
+p.treatment.Bacteroidetes_Prevotella <-lmtest::lrtest( m.all[[3]], m.time[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella <-lmtest::lrtest(m.all[[3]], m.time[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+## Actinobacteria_Gardnerella ##
+p.treatment.Actinobacteria_Gardnerella <-lmtest::lrtest( m.all[[4]], m.time[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Actinobacteria_Gardnerella <-lmtest::lrtest(m.all[[4]], m.time[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+## Actinobacteria_Atopobium ##
+p.treatment.Actinobacteria_Atopobium <-lmtest::lrtest( m.all[[5]], m.time[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Actinobacteria_Atopobium <-lmtest::lrtest(m.all[[5]], m.time[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+## Fusobacteria_Sneathia ##
+p.treatment.Fusobacteria_Sneathia <-lmtest::lrtest( m.all[[6]], m.time[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Fusobacteria_Sneathia <-lmtest::lrtest(m.all[[6]], m.time[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+## Tenericutes_Ureaplasma ##
+p.treatment.Tenericutes_Ureaplasma <-lmtest::lrtest( m.all[[7]], m.time[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Tenericutes_Ureaplasma <-lmtest::lrtest(m.all[[7]], m.time[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+## Tenericutes_Mycoplasma ##
+p.treatment.Tenericutes_Mycoplasma <-lmtest::lrtest( m.all[[8]], m.time[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Tenericutes_Mycoplasma <-lmtest::lrtest(m.all[[8]], m.time[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+## Firmicutes_Lactobacillus ##
+p.treatment.Firmicutes_Lactobacillus <-lmtest::lrtest( m.all[[9]], m.time[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Firmicutes_Lactobacillus <-lmtest::lrtest(m.all[[9]], m.time[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+## Okay we see no effect of anything, which is sad 
+```
+
+```{r eval=FALSE, include=FALSE}
+# check the stats and do multiple correction <- loop through the output
+library(emmeans)
+m.emm <- list()
+padjust <- list()
+for (i in 1:length(mod)){
+m.emm[[i]] <- emmeans(mod[[i]], pairwise ~ Treatment | meta_Time)}
+
+padjust[[i]] <- contrast(m.emm[[1]], "trt.vs.ctrl")
+
+# unfortunate no sig. effect of treatment
+```
+Calculate effect size Cliff's D
+```{r}
+library(tidyverse)
+## pairwise 
+# x: value
+# y: feature i want to test 
+# sub.1 <- mo.gen.v.all[mo.gen.v.all$meta_Time == "TP1", ]
+ 
+cliff_d_2 <- as.data.frame(colnames(mo.gen.v[, c(1:9)]))
+cliff_d_2$D <-NA 
+
+sub.2 <-mo.gen.v %>%
+  dplyr::filter(mo.gen.v$meta_Time != "1")
+
+
+
+treatment <- sub.2$Firmicutes_Lactobacillus[sub.2$Treatment == "Treatment"] 
+control <- sub.2$Firmicutes_Lactobacillus[sub.2$Treatment == "Control"] 
+# c <- CliffsDelta(control, treatment)
+
+cliff_d_2$D[c(9,9)] <- CliffsDelta(control, treatment)
+
+c <-cliff_d_2
+c$D3 <-NA  
+
+sub.3 <-mo.gen.v %>%
+  dplyr::filter(mo.gen.v$meta_Time != "0")
+
+treatment <- sub.3$Firmicutes_Lactobacillus[sub.3$Treatment == "Treatment"] 
+control <- sub.3$Firmicutes_Lactobacillus[sub.3$Treatment == "Control"] 
+# c <- CliffsDelta(control, treatment)
+c$D3[c(9,9)] <- CliffsDelta(control, treatment)
+
+colnames(c) <- c("taxa", "Cliff's D_0", "Cliff's D_1")
+write.table(c, file = "../final.analysis/output/cliffs_d.anal.tsv", sep = "\t", quote = F)
+```
+
+
+The ggeffects package computes estimated marginal means (predicted values) for the response. Visualize predictions from the multiple regression models.
+loop through the 9 bacteria we are interested in 
+```{r}
+library(ggplot2)
+ppre <- list()
+dat <- list()
+for (i in 1:length(mod)){
+ppre[[i]] <- ggeffects::ggpredict(mod[[i]], c("meta_Time", "Treatment [Control,Treatment]"))
+dat[[i]] <- plot(ppre[[i]], add.data = T)
+dat[[i]] + scale_color_manual(values = kk.beta)+ # somehow this is not working in the loop
+  xlab("timepoint")+
+  theme (axis.title.x = element_blank (), 
+         axis.text.x = element_text (size = 13), 
+         axis.text.y = element_text (size = 13), 
+         axis.title.y = element_text (size = 13)) }
+
+ppr1 <- dat[[1]]+ scale_color_manual(values = kk.beta)+ ggtitle("Predicted Bacteroidetes_Prevotella.6 \n of Treatment vs. Control")
+ppr2 <- dat[[2]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Bacteroidetes_Prevotella.9 \n of Treatment vs. Control")
+
+ppr3 <- dat[[3]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Bacteroidetes_Prevotella \n of Treatment vs. Control")
+
+ppr4 <- dat[[4]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Actinobacteria_Gardnerella \n of Treatment vs. Control")
+
+ppr5 <- dat[[5]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Actinobacteria_Atopobium \n of Treatment vs. Control")
+
+ppr6 <- dat[[6]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Fusobacteria_Sneathia \n of Treatment vs. Control")
+
+ppr7 <- dat[[7]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Tenericutes_Ureaplasma \n of Treatment vs. Control")
+
+ppr8 <- dat[[8]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Tenericutes_Mycoplasma \n of Treatment vs. Control")
+
+ppr9 <- dat[[9]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Firmicutes_Lactobacillus \n of Treatment vs. Control")
+
+ggsave(ppr1, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Bacteroidetes_Prevotella.6.predict.new.svg")
+ggsave(ppr2, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Bacteroidetes_Prevotella.9.predict.new.svg")
+ggsave(ppr3, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Bacteroidetes_Prevotella.predict.new.svg")
+ggsave(ppr4, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Actinobacteria_Gardnerella.predict.new.svg")
+ggsave(ppr5, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Actinobacteria_Atopobium.predict.new.svg")
+ggsave(ppr6, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Fusobacteria_Sneathia.predict.new.svg")
+ggsave(ppr7, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Tenericutes_Ureaplasma.predict.new.svg")
+ggsave(ppr8, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Tenericutes_Mycoplasma.predict.new.svg")
+ggsave(ppr9, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Firmicutes_Lactobacillus.predict.new.svg")
+```
+
+# conclusion
+we don't see an effect of Treatment on either Shannon and the tested bacteria.
+
+
+
+
+

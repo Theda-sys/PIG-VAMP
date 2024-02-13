@@ -1,0 +1,1149 @@
+---
+title: "models"
+author: "Theda Bartolomaeus"
+date: "9/25/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# load packages 
+```{r}
+library(phyloseq)
+library(tidyverse)
+library(tidyr)
+library(data.table)
+require(ggpubr)
+require(rstatix)
+library(wesanderson)
+library(cowplot)
+library(ggsci)
+library(rtk)
+```
+# load the data 
+```{r}
+load(file ="data/rtk_all_normalized_OTUs.r")
+load(file ="data/meta_Time.r" )
+biom_file <- import_biom("data/Lotus_output/IceCream_Lotus/OTU.biom", sep = "")
+# we will include an interaction term
+meta_Time$interaction = paste(meta_Time$Treatment, meta_Time$meta_Time, sep="_")
+meta_Time <- meta_Time[row.names(meta_Time) %in% colnames(rtk_use_all), ]
+
+m12 <- read.table(file = "data/m12.csv", sep = ",", header = T, row.names = 1)
+m13 <- read.table(file = "data/m13.csv", sep = ",", header = T, row.names = 1)
+m23 <- read.table(file = "data/m23.csv", sep = ",", header = T, row.names = 1)
+
+Anal_Swabs1 <- m12[m12$Swabsite == "Anal_Swabs", ]
+Anal_Swabs2 <- m23[m23$Swabsite == "Anal_Swabs", ]
+Anal_Swabs3 <- m13[m13$Swabsite == "Anal_Swabs", ]
+
+```
+new object
+```{r}
+otu <- otu_table(rtk_use_all, taxa_are_rows = T)  #check sample 
+##2) Use sample dataframe and transform it to "sample data" format
+sample<- sample_data(meta_Time)
+##Check which samples are not in the out matrix 
+setdiff(sample_names(sample), sample_names(otu))
+##3) Get Tax file 
+##
+tax <- tax_table(biom_file) #get tax from biom_file
+# save it all in a merged new phyloseq object 
+PS.t.i <- merge_phyloseq(otu, sample, tax)
+# saveRDS(PS.t.i, file="output/PhyloSeqComp.time.interaction.Rds") ##Store Phyloseq for further analysis
+```
+# Alpha and Beta div.
+we have repeated measurements, even an interaction term (Treatment/time) <- not sure, will test 
+
+```{r}
+# get alphadiv estimate
+alphadiv<- estimate_richness(PS.t.i)
+alphadiv$Sampl_ID <- row.names(alphadiv)
+# subselet different indices pf interested
+alphadiv%>%
+  dplyr::select(Observed, Chao1, Shannon) -> alphadiv
+
+alphadiv.1 <- merge(alphadiv, Anal_Swabs1, by = 0)
+rownames(alphadiv.1)<- alphadiv.1$Row.names
+alphadiv.1$Row.names<- NULL
+alphadiv.1$Treatment[is.na(alphadiv.1$Treatment)] <- "Control"
+
+alphadiv.2 <- merge(alphadiv, Anal_Swabs2, by = 0)
+rownames(alphadiv.2)<- alphadiv.2$Row.names
+alphadiv.2$Row.names<- NULL
+alphadiv.2$Treatment[is.na(alphadiv.2$Treatment)] <- "Control"
+
+alphadiv.3 <- merge(alphadiv, Anal_Swabs3, by = 0)
+rownames(alphadiv.3)<- alphadiv.3$Row.names
+alphadiv.3$Row.names<- NULL
+alphadiv.3$Treatment[is.na(alphadiv.3$Treatment)] <- "Control"
+```
+Plot each patient seperatly
+```{r eval=FALSE, include=FALSE}
+# check for each individuum seperatly
+kk.beta <- c("#16317d","#b86092") # here we are selecting colors defining treatment and control 
+ggplot(ac.a.l,
+       aes(x = meta_Time, y = value, color = Treatment,
+group = PatID))+ geom_line()+
+geom_point()+ facet_wrap(~PatID, labeller = "label_both")+ theme_bw()+
+scale_color_manual(values = kk.beta)+
+  ylab("Microbiome richness (Shannon index)")+
+  xlab("timepoint")-> p2
+
+ggsave(p2, width = 5, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/each_patient/shannon.a.svg")
+p2
+# might be interessting Pat: 1, 19, 39 and 5 <- check for complaience
+# # none of them hat preterm birth ionteretsing finding
+```
+## lineare mixed effect models
+# Shannon div - alpha diversity index
+to check the effect of time on each individuum - here we are just looking at the vagina set 
+Question: dose the treatment have an effect on the alpha div? 
+
+```{r}
+# first we need to transfer into long format 
+alphadiv.1$Treatment <- as.factor(alphadiv.1$Treatment)
+alphadiv.1$Treatment <- fct_relevel(alphadiv.1$Treatment, "Control", "Treatment")
+
+#Time should not be as factor! this should be numeric! best would be days since inclusion 
+#ac.v$meta_Time[ac.v$meta_Time == "TP1"] <- "1"
+alphadiv.1$t1vst2 <- as.character(alphadiv.1$t1vst2)
+
+#ac.v$meta_Time <- as.numeric(ac.v$meta_Time)
+alphadiv.1$Age_at_inclusion <- as.numeric(alphadiv.1$Age_at_inclusion)
+alphadiv.1$PatID <- as.factor(alphadiv.1$PatID)
+alphadiv.1$Swabsite <- NULL
+alphadiv.1$meta_Time <- NULL
+alphadiv.1$Previous_preterm_birth_Yes1_No0_and_GA <- as.character(alphadiv.1$Previous_preterm_birth_Yes1_No0_and_GA)
+alphadiv.1$compliance <- as.factor(alphadiv.1$compliance)
+alphadiv.1$compliance <- fct_relevel(alphadiv.1$compliance, "control", "none", "poor", "good", "excellent")
+# here i will put none and poor into control and good and excellent into complied 
+# ac.v$compliance[ac.v$compliance == "none"] <- "control"
+# ac.v$compliance[ac.v$compliance == "poor"] <- "control"
+# ac.v$compliance[ac.v$compliance == "good"] <- "complied"
+# ac.v$compliance[ac.v$compliance == "excellent"] <- "complied"
+alphadiv.1$Spontaneous_1_Induced_birth_0 <- as.character(alphadiv.1$Spontaneous_1_Induced_birth_0)
+alphadiv.1$Antibiotics_during_pregnancy_Yes1_No0 <- as.character(alphadiv.1$Antibiotics_during_pregnancy_Yes1_No0)
+ac.v.l.1 <- alphadiv.1 %>%
+  reshape2::melt(id.vars=c("Sampl_ID", "PatID", "t1vst2", "Treatment", "BMI", "Age_at_inclusion", "Previous_preterm_birth_Yes1_No0_and_GA", "Spontaneous_1_Induced_birth_0", "compliance", "Antibiotics_during_pregnancy_Yes1_No0"), measure.vars=c("Shannon"))
+```
+
+```{r}
+model.ob <- lmerTest::lmer(value ~ t1vst2 + Treatment + (1 | PatID) + (1 | Age_at_inclusion) + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t1vst2, data = ac.v.l.1, REML = F)
+summary(model.ob) 
+# model dose fit however the random effects are very small
+```
+```{r eval=FALSE, include=FALSE}
+library(emmeans)
+# m.emm <- emmeans(model.ob, "Treatment", "meta_Time")
+# p.adjust.1 <- contrast(m.emm, adjust = "fdr", "trt.vs.ctrl")
+# p.adjust.1
+
+emm <- emmeans::emmeans(model.ob, pairwise ~ Treatment | meta_Time)
+p.adjust.1 <- contrast(emm[[1]], "trt.vs.ctrl") 
+# pairwise adjusting 
+# The default multiplicity adjustment method is "tukey"
+p.adjust.1 
+# no significant difference between Treatment - Control 
+```
+The ggeffects package computes estimated marginal means (predicted values) for the response. Visualize predictions from the multiple regression models.
+```{r}
+kk.beta <- c("#16317d","#b86092")
+dat <- ggeffects::ggpredict(model.ob, c("meta_Time", "Treatment [Control,Treatment]"))
+dat <- plot(dat, add.data = T)
+dat + scale_color_manual(values = kk.beta)+
+  ylab("Microbiome richness \n (Shannon index)")+
+  xlab("timepoint")+
+  theme (axis.title.x = element_text (size = 13), 
+         axis.text.x = element_text (size = 13), 
+         axis.text.y = element_text (size = 13), 
+         axis.title.y = element_text (size = 13))+
+  ggtitle("Predicted Shannon index of \n Treatment vs. Control") -> plot
+ggsave(plot, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/shannon.a.predict.new.svg") # harte streuung der daten 
+```
+
+After building a linear mixed model, I wanted to do post-hoc test to compare treatment and control at the different timepoints
+THIS IS FOR t1vst2
+```{r}
+# age also as random effect
+model.main.1 <- lmerTest::lmer(value ~ t1vst2 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI , data = ac.v.l.1, REML = F)
+
+model.ob.1 <- lmerTest::lmer(value ~ t1vst2 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:t1vst2, data = ac.v.l.1, REML = F)
+# age also as random effect
+model.ob.time.1 <- lmerTest::lmer(value ~ t1vst2  + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:t1vst2, data = ac.v.l.1, REML = F)
+# age also as random effect
+model.ob.treamtne.1 <- lmerTest::lmer(value ~  Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:t1vst2, data = ac.v.l.1, REML = F)
+
+# vergleiche die models
+
+lmtest::lrtest(model.ob.1, model.main.1)$'Pr(>Chisq)'# no interaction effect 0.7440341
+
+lmtest::lrtest(model.ob.1, model.ob.time.1)$'Pr(>Chisq)' # #2.2e-16 *** das bedeutte time hat einen effect
+
+lmtest::lrtest(model.ob.1, model.ob.treamtne.1)$'Pr(>Chisq)' # no effect
+```
+# timepoint 2 vs 3
+```{r}
+# first we need to transfer into long format 
+# remove TP4 since we have only one datapoint there
+alphadiv.2$Treatment[is.na(alphadiv.2$Treatment)] <- "Control"
+alphadiv.2$Treatment <- as.factor(alphadiv.2$Treatment)
+alphadiv.2$Treatment <- fct_relevel(alphadiv.2$Treatment, "Control", "Treatment")
+
+#Time should not be as factor! this should be numeric! best would be days since inclusion 
+#ac.v$meta_Time[ac.v$meta_Time == "TP1"] <- "1"
+alphadiv.2$t2vst3 <- as.character(alphadiv.2$t2vst3)
+
+#ac.v$meta_Time <- as.numeric(ac.v$meta_Time)
+alphadiv.2$Age_at_inclusion <- as.numeric(alphadiv.2$Age_at_inclusion)
+alphadiv.2$PatID <- as.factor(alphadiv.2$PatID)
+alphadiv.2$Swabsite <- NULL
+alphadiv.2$meta_Time <- NULL
+alphadiv.2$Previous_preterm_birth_Yes1_No0_and_GA <- as.character(alphadiv.2$Previous_preterm_birth_Yes1_No0_and_GA)
+alphadiv.2$compliance <- as.factor(alphadiv.2$compliance)
+alphadiv.2$compliance <- fct_relevel(alphadiv.2$compliance, "control", "none", "poor", "good", "excellent")
+# here i will put none and poor into control and good and excellent into complied 
+# ac.v$compliance[ac.v$compliance == "none"] <- "control"
+# ac.v$compliance[ac.v$compliance == "poor"] <- "control"
+# ac.v$compliance[ac.v$compliance == "good"] <- "complied"
+# ac.v$compliance[ac.v$compliance == "excellent"] <- "complied"
+alphadiv.2$Spontaneous_1_Induced_birth_0 <- as.character(alphadiv.2$Spontaneous_1_Induced_birth_0)
+alphadiv.2$Antibiotics_during_pregnancy_Yes1_No0 <- as.character(alphadiv.2$Antibiotics_during_pregnancy_Yes1_No0)
+ac.v.l.2 <- alphadiv.2 %>%
+  reshape2::melt(id.vars=c("Sampl_ID", "PatID", "t2vst3", "Treatment", "BMI", "Age_at_inclusion", "Previous_preterm_birth_Yes1_No0_and_GA", "Spontaneous_1_Induced_birth_0", "compliance", "Antibiotics_during_pregnancy_Yes1_No0"), measure.vars=c("Shannon"))
+```
+After building a linear mixed model, I wanted to do post-hoc test to compare treatment and control at the different timepoints
+THIS IS FOR t2vst3
+```{r}
+# age also as random effect
+model.main.2 <- lmerTest::lmer(value ~ t2vst3 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI , data = ac.v.l.2, REML = F)
+
+model.ob.2 <- lmerTest::lmer(value ~ t2vst3 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:t2vst3, data = ac.v.l.2, REML = F)
+# age also as random effect
+model.ob.time.2 <- lmerTest::lmer(value ~ t2vst3  + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:t2vst3, data = ac.v.l.2, REML = F)
+# age also as random effect
+model.ob.treamtne.2 <- lmerTest::lmer(value ~  Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:t2vst3, data = ac.v.l.2, REML = F)
+
+# vergleiche die models
+
+lmtest::lrtest(model.ob.2, model.main.2)$'Pr(>Chisq)'# 0.489055
+
+lmtest::lrtest(model.ob.2, model.ob.time.2)$'Pr(>Chisq)' # das beduetet Treatment hat einen effect # 2.2e-16 ***
+
+lmtest::lrtest(model.ob.2, model.ob.treamtne.2)$'Pr(>Chisq)' #das beduetet Treatment hat einen effect # 2.2e-16 ***
+
+```
+# timepoint 1 vs 3
+```{r}
+# first we need to transfer into long format 
+# remove TP4 since we have only one datapoint there
+alphadiv.3$Treatment[is.na(alphadiv.3$Treatment)] <- "Control"
+alphadiv.3$Treatment <- as.factor(alphadiv.3$Treatment)
+alphadiv.3$Treatment <- fct_relevel(alphadiv.3$Treatment, "Control", "Treatment")
+
+#Time should not be as factor! this should be numeric! best would be days since inclusion 
+#ac.v$meta_Time[ac.v$meta_Time == "TP1"] <- "1"
+alphadiv.3$t1vst3 <- as.character(alphadiv.3$t1vst3)
+
+#ac.v$meta_Time <- as.numeric(ac.v$meta_Time)
+alphadiv.3$Age_at_inclusion <- as.numeric(alphadiv.3$Age_at_inclusion)
+alphadiv.3$PatID <- as.factor(alphadiv.3$PatID)
+alphadiv.3$Swabsite <- NULL
+alphadiv.3$meta_Time <- NULL
+alphadiv.3$Previous_preterm_birth_Yes1_No0_and_GA <- as.character(alphadiv.3$Previous_preterm_birth_Yes1_No0_and_GA)
+alphadiv.3$compliance <- as.factor(alphadiv.3$compliance)
+alphadiv.3$compliance <- fct_relevel(alphadiv.3$compliance, "control", "none", "poor", "good", "excellent")
+# here i will put none and poor into control and good and excellent into complied 
+# ac.v$compliance[ac.v$compliance == "none"] <- "control"
+# ac.v$compliance[ac.v$compliance == "poor"] <- "control"
+# ac.v$compliance[ac.v$compliance == "good"] <- "complied"
+# ac.v$compliance[ac.v$compliance == "excellent"] <- "complied"
+alphadiv.3$Spontaneous_1_Induced_birth_0 <- as.character(alphadiv.3$Spontaneous_1_Induced_birth_0)
+alphadiv.3$Antibiotics_during_pregnancy_Yes1_No0 <- as.character(alphadiv.3$Antibiotics_during_pregnancy_Yes1_No0)
+ac.v.l.3 <- alphadiv.3 %>%
+  reshape2::melt(id.vars=c("Sampl_ID", "PatID", "t1vst3", "Treatment", "BMI", "Age_at_inclusion", "Previous_preterm_birth_Yes1_No0_and_GA", "Spontaneous_1_Induced_birth_0", "compliance", "Antibiotics_during_pregnancy_Yes1_No0"), measure.vars=c("Shannon"))
+```
+
+THIS IS FOR t1vst3
+```{r}
+# age also as random effect
+model.main.3 <- lmerTest::lmer(value ~ t1vst3 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI , data = ac.v.l.3, REML = F)
+
+model.ob.3 <- lmerTest::lmer(value ~ t1vst3 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:t1vst3, data = ac.v.l.3, REML = F)
+# age also as random effect
+model.ob.time.3 <- lmerTest::lmer(value ~ t1vst3  + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:t1vst3, data = ac.v.l.3)
+# age also as random effect
+model.ob.treamtne.3 <- lmerTest::lmer(value ~  Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Treatment:t1vst3, data = ac.v.l.3, REML = F)
+
+# vergleiche die models
+
+lmtest::lrtest(model.ob.3, model.main.3)$'Pr(>Chisq)' #0.3768105
+lmtest::lrtest(model.ob.3, model.ob.time.3)$'Pr(>Chisq)' # das beduetet Treatment hat einen effect # 2.2e-16 ***
+lmtest::lrtest(model.ob.3, model.ob.treamtne.3)$'Pr(>Chisq)' #das beduetet Treatment hat einen effect # 2.2e-16 ***
+
+```
+# look at the effect size 
+Calculate effect size crohn d
+
+
+```{r}
+# Effect size Treatment yes/no -> Cliffs Delta
+# Effect size meta_Time - > geht nicht so, aber wir können jeden Zeitpunkt separat
+source("~/Documents/Preterm_IceCream/final.analysis/Cliff_d.R")
+# x: value
+# y: feature i want to test 
+
+
+### T1 vs T2
+control <- ac.v.l.1$value[ac.v.l.1$Treatment == "Control"]
+treatment <- ac.v.l.1$value[ac.v.l.1$Treatment == "Treatment"]
+CliffsDelta(control, treatment) #0.1005693
+
+### T2 vs T3
+control <- ac.v.l.2$value[ac.v.l.2$Treatment == "Control"]
+treatment <- ac.v.l.2$value[ac.v.l.2$Treatment == "Treatment"]
+CliffsDelta(control, treatment) #  0.1728111
+
+### T1 vs T3
+control <- ac.v.l.3$value[ac.v.l.3$Treatment == "Control"]
+treatment <- ac.v.l.3$value[ac.v.l.3$Treatment == "Treatment"]
+CliffsDelta(control, treatment) #  0.06150794
+```
+
+# Genus level models
+extract the genus level from the phyloseq object 
+```{r}
+genus <- tax_glom(physeq = PS.t.i, taxrank = "Rank6")
+data_biom_all <- as.data.frame(tax_table(PS.t.i)) # still includes NA's
+data_biom_tax <- as.data.frame(tax_table(genus)) #biome dataframe mit taxa -> damit die zuordnung klappt beim mergen
+data_biom <-as.data.frame(otu_table(genus)) #biome datafram mit otu
+# umbennen der Ranks in phylum etc.
+colnames(data_biom_tax)<-c("kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+
+# genus_otu_short <- as.data.frame(otu_table(data_biom_tax))
+data_biom_tax$hash <- rownames(data_biom_tax)
+data_biom$hash <- rownames(data_biom)
+joined_genus <- left_join(data_biom_tax, data_biom)
+joined_genus$hash <- NULL
+
+# I will prepare a new coloum of names combining phylum and genus
+genus <- joined_genus[, - c(1:5,7) ]
+phylum <- joined_genus[, - c(1, 3:7) ]
+ph.gen <- joined_genus[, -c(1, 3:5,7)]
+ph.gen$Genus <- sub("g__", "",ph.gen$Genus)
+ph.gen$Phylum <- sub("p__", "",ph.gen$Phylum)
+ph.gen$C = paste(ph.gen$Phylum, ph.gen$Genus, sep="_")
+rownames(ph.gen) <- make.names(ph.gen$C, unique = T)
+ph.gen$Genus <- NULL
+ph.gen$Phylum <- NULL
+ph.gen$C <- NULL
+ph.gen <- ph.gen[order(rownames(ph.gen)), ]
+ph.gen <- as.data.frame(t(ph.gen))
+```
+# now we merge metadata and genus table 
+
+```{r}
+# i need to remove a bunch of bacteria since we have only 0 abundances there 
+gen.red <- ph.gen %>%
+  select((c("Bacteroidetes_Paraprevotella","Bacteroidetes_Prevotella", "Bacteroidetes_Prevotella.6", "Bacteroidetes_Prevotella.9", "Actinobacteria_Gardnerella", "Actinobacteria_Atopobium", "Fusobacteria_Sneathia", "Tenericutes_Ureaplasma", "Tenericutes_Mycoplasma", "Firmicutes_Lactobacillus")))
+```
+
+```{r}
+mo.gen.1 <- merge(gen.red, Anal_Swabs1, by = 0)
+row.names(mo.gen.1) <- mo.gen.1$Row.names
+mo.gen.1$Row.names <- NULL
+mo.gen.1$Treatment[is.na(mo.gen.1$Treatment)] <- "Control"
+# one more time make sure everything is annotated correct for the model
+
+# mo.gen$meta_Time <- as.factor(mo.gen$meta_Time)
+# mo.gen$meta_Time <- fct_relevel(mo.gen$meta_Time, "TP1", "TP2", "TP3")
+mo.gen.1$t1vst2 <- as.character(mo.gen.1$t1vst2)
+mo.gen.1$Age_at_inclusion <- as.numeric(mo.gen.1$Age_at_inclusion)
+mo.gen.1$PatID <- as.factor(mo.gen.1$PatID)
+mo.gen.1$Swabsite <- as.factor(mo.gen.1$Swabsite)
+mo.gen.1$Previous_preterm_birth_Yes1_No0_and_GA <- as.factor(mo.gen.1$Previous_preterm_birth_Yes1_No0_and_GA)
+mo.gen.1$compliance <- as.factor(mo.gen.1$compliance)
+mo.gen.1$compliance <- fct_relevel(mo.gen.1$compliance, "control", "none", "poor", "good", "excellent")
+mo.gen.1$Spontaneous_1_Induced_birth_0 <- as.factor(mo.gen.1$Spontaneous_1_Induced_birth_0)
+# save(mo.gen, file = "mo.gen.all.r")
+mo.gen.1$Antibiotics_during_pregnancy_Yes1_No0 <- as.factor(mo.gen.1$Antibiotics_during_pregnancy_Yes1_No0)
+# subset to vagina
+mo.gen.1 <- mo.gen.1[, c(1:18,21,23, 29)]
+mo.gen.1$Swabsite <-NULL
+mo.gen.1$meta_Time <-NULL
+```
+
+```{r eval=FALSE, include=FALSE}
+# check for each individuum seperatly
+kk.beta <- c("#16317d","#b86092") # here we are selecting colors defining treatment and control 
+
+
+plo <- list()    
+
+for (i in 1:12){
+plo[[i]] <- ggplot(mo.gen.a,
+       aes(x = meta_Time, y = mo.gen.a[ , i], color = Treatment,
+group = PatID))+ geom_line()+
+geom_point()+ facet_wrap(~PatID, labeller = "label_both")+ theme_bw()+
+scale_color_manual(values = kk.beta)+
+  xlab("timepoint")+
+  theme(axis.title.x = element_blank())+
+  ylab(colnames(mo.gen.a)[i])
+}
+### Use your plot_list here:
+glist <- cowplot::plot_grid(plo[[1]], plo[[2]], plo[[3]], plo[[4]])
+ggsave(glist, width = 17, height = 12, dpi = 300, device = "svg", filename = "figures/new.figures/each_patient/bacteria.patient.a.svg")
+
+glist1 <- cowplot::plot_grid(plo[[5]], plo[[6]], plo[[7]], plo[[8]])
+ggsave(glist1, width = 17, height = 12, dpi = 300, device = "svg", filename = "figures/new.figures/each_patient/bacteria.patient1.a.svg")
+
+glist2 <- cowplot::plot_grid(plo[[9]],plo[[10]],plo[[11]],plo[[12]])
+ggsave(glist2, width = 5, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/each_patient/bacteria.patient2.a.svg")
+```
+
+```{r}
+library(tidyverse)
+mo.gen.1 %>%
+  reshape2::melt(id.vars=c("Sampl_ID", "PatID", "t1vst2", "Treatment", "BMI", "Age_at_inclusion", "Previous_preterm_birth_Yes1_No0_and_GA", "compliance", "Antibiotics_during_pregnancy_Yes1_No0")) -> mo.gen.1
+mo.gen.1$value <- as.numeric(mo.gen.1$value)
+```
+
+# loop
+loop through the whole data set and build models
+
+```{r}
+library(lmerTest)
+# loop the variables
+groups <- unique(mo.gen.1$variable)
+mod <- list()    
+Beta_0 <- rep(0, length(groups))
+Beta_1 <- rep(0, length(groups))
+
+for (i in seq_along(groups)){
+mod[[i]] <- lmer(value ~ t1vst2 + Treatment + (1 | PatID) + (1 | Age_at_inclusion) + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t1vst2, data = mo.gen.1, REML = F, subset = variable == groups[i])
+}
+
+# loop the variables
+groups <- unique(mo.gen.1$variable)
+summary.mod <- list()    
+Beta_0 <- rep(0, length(groups))
+Beta_1 <- rep(0, length(groups))
+
+for (i in seq_along(groups)){
+summary.mod[[i]] <- summary(lmer(value ~ t1vst2 + Treatment + (1 | PatID) + (1 | Age_at_inclusion) + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t1vst2, data = mo.gen.1, REML = F, subset = variable == groups[i]))
+}
+# model 4 failed to converge 
+save(mod, file = "data/mod.all.1.anal.excluded.r")
+save(summary.mod, file = "data/summary.mod.1.anal.excluded.r")
+```
+
+After building a linear mixed model, I wanted to do post-hoc test to compare treatment and control at the different timepoints
+
+```{r}
+m.all <- list()
+m.time <- list()
+m.treatment <- list()
+m.main <- list()
+p.time <- list()
+p.treatment <- list()
+
+for (i in seq_along(groups)){
+m.main[[i]] <- lmerTest::lmer(value ~ t1vst2 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Antibiotics_during_pregnancy_Yes1_No0 , data = mo.gen.1, REML = F, subset = variable == groups[i])
+  
+m.all[[i]] <- lmerTest::lmer(value ~ t1vst2 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t1vst2, data = mo.gen.1, REML = F, subset = variable == groups[i])
+
+m.time[[i]] <- lmerTest::lmer(value ~ t1vst2 + (1 | PatID)+(1 | Age_at_inclusion)   + BMI + Antibiotics_during_pregnancy_Yes1_No0 +Treatment:t1vst2, data = mo.gen.1, REML = F, subset = variable == groups[i])
+
+m.treatment[[i]] <- lmerTest::lmer(value ~  Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI +Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t1vst2, data = mo.gen.1, REML = F, subset = variable == groups[i]) 
+}
+
+# empty dataframe
+p.values <- as.data.frame(groups)
+p.values$p.treatment <- NA
+p.values$p.time <- NA
+p.values$p.interaction <- NA
+## Bacteroidetes_Prevotella.6 ##
+Bacteroidetes_Paraprevotella.main <- m.main[[1]]
+Bacteroidetes_Paraprevotella.all <- m.all[[1]]
+Bacteroidetes_Paraprevotella.time <- m.time[[1]]
+Bacteroidetes_Paraprevotella.treatment <- m.treatment[[1]]
+
+# vergleiche die models
+p.interaction.Bacteroidetes_Paraprevotella <-lmtest::lrtest(Bacteroidetes_Paraprevotella.all, Bacteroidetes_Paraprevotella.main)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.treatment.Bacteroidetes_Paraprevotella <-lmtest::lrtest(Bacteroidetes_Paraprevotella.all, Bacteroidetes_Paraprevotella.time)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.time.Bacteroidetes_Paraprevotella <-lmtest::lrtest(Bacteroidetes_Paraprevotella.all, Bacteroidetes_Paraprevotella.treatment)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(1,1)] <- p.interaction.Bacteroidetes_Paraprevotella
+p.values$p.treatment[c(1,1)] <- p.treatment.Bacteroidetes_Paraprevotella
+p.values$p.time[c(1,1)] <- p.treatment.Bacteroidetes_Paraprevotella
+
+## Bacteroidetes_Prevotella.9 ##
+
+p.interaction.Bacteroidetes_Prevotella <-lmtest::lrtest( m.all[[2]], m.main[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Bacteroidetes_Prevotella <-lmtest::lrtest( m.all[[2]], m.time[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella <-lmtest::lrtest(m.all[[2]], m.treatment[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(2,2)] <- p.interaction.Bacteroidetes_Prevotella
+p.values$p.treatment[c(2,2)] <- p.treatment.Bacteroidetes_Prevotella
+p.values$p.time[c(2,2)] <- p.time.Bacteroidetes_Prevotella
+
+
+## Bacteroidetes_Prevotella ##
+p.interaction.Bacteroidetes_Prevotella.6 <-lmtest::lrtest( m.all[[3]], m.main[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Bacteroidetes_Prevotella.6 <-lmtest::lrtest( m.all[[3]], m.time[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella.6 <-lmtest::lrtest(m.all[[3]], m.treatment[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(3,3)] <- p.interaction.Bacteroidetes_Prevotella.6
+p.values$p.treatment[c(3,3)] <- p.treatment.Bacteroidetes_Prevotella.6
+p.values$p.time[c(3,3)] <- p.time.Bacteroidetes_Prevotella.6
+
+
+## Bacteroidetes_Prevotella.9 ##
+p.interaction.Bacteroidetes_Prevotella.9 <-lmtest::lrtest( m.all[[4]], m.main[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Bacteroidetes_Prevotella.9 <-lmtest::lrtest( m.all[[4]], m.time[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella.9 <-lmtest::lrtest(m.all[[4]], m.treatment[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(4,4)] <- p.interaction.Bacteroidetes_Prevotella.9
+p.values$p.treatment[c(4,4)] <- p.treatment.Bacteroidetes_Prevotella.9
+p.values$p.time[c(4,4)] <- p.time.Bacteroidetes_Prevotella.9
+
+
+## Actinobacteria_Gardnerellam ##
+p.interaction.Actinobacteria_Gardnerella <-lmtest::lrtest( m.all[[5]], m.main[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Actinobacteria_Gardnerella <-lmtest::lrtest( m.all[[5]], m.time[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Actinobacteria_Gardnerella <-lmtest::lrtest(m.all[[5]], m.treatment[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(5,5)] <- p.interaction.Actinobacteria_Gardnerella
+p.values$p.treatment[c(5,5)] <- p.treatment.Actinobacteria_Gardnerella
+p.values$p.time[c(5,5)] <- p.time.Actinobacteria_Gardnerella
+
+
+## Actinobacteria_Atopobium ##
+p.interaction.Actinobacteria_Atopobium <-lmtest::lrtest( m.all[[6]], m.main[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Actinobacteria_Atopobium <-lmtest::lrtest( m.all[[6]], m.time[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Actinobacteria_Atopobium <-lmtest::lrtest(m.all[[6]], m.treatment[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(6,6)] <- p.interaction.Actinobacteria_Atopobium
+p.values$p.treatment[c(6,6)] <- p.treatment.Actinobacteria_Atopobium
+p.values$p.time[c(6,6)] <- p.time.Actinobacteria_Atopobium
+
+
+## Fusobacteria_Sneathia ##
+p.interaction.Fusobacteria_Sneathia <-lmtest::lrtest( m.all[[7]], m.main[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Fusobacteria_Sneathia <-lmtest::lrtest( m.all[[7]], m.time[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Fusobacteria_Sneathia <-lmtest::lrtest(m.all[[7]], m.treatment[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(7,7)] <- p.interaction.Fusobacteria_Sneathia
+p.values$p.treatment[c(7,7)] <- p.treatment.Fusobacteria_Sneathia
+p.values$p.time[c(7,7)] <- p.time.Fusobacteria_Sneathia
+
+
+## Tenericutes_Ureaplasma ##
+p.interaction.Tenericutes_Ureaplasma <-lmtest::lrtest( m.all[[8]], m.main[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Tenericutes_Ureaplasma <-lmtest::lrtest( m.all[[8]], m.time[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Tenericutes_Ureaplasma <-lmtest::lrtest(m.all[[8]], m.treatment[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(8,8)] <- p.interaction.Tenericutes_Ureaplasma
+p.values$p.treatment[c(8,8)] <- p.treatment.Tenericutes_Ureaplasma
+p.values$p.time[c(8,8)] <- p.time.Tenericutes_Ureaplasma
+
+
+## Tenericutes_Mycoplasma ##
+p.interaction.Tenericutes_Mycoplasma <-lmtest::lrtest( m.all[[9]], m.main[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Tenericutes_Mycoplasma <-lmtest::lrtest( m.all[[9]], m.time[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Tenericutes_Mycoplasma <-lmtest::lrtest(m.all[[9]], m.treatment[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(9,9)] <- p.interaction.Tenericutes_Mycoplasma
+p.values$p.treatment[c(9,9)] <- p.treatment.Tenericutes_Mycoplasma
+p.values$p.time[c(9,9)] <- p.time.Tenericutes_Mycoplasma
+
+## Firmicutes_Lactobacillus ##
+p.interaction.Firmicutes_Lactobacillus <-lmtest::lrtest( m.all[[10]], m.main[[10]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Firmicutes_Lactobacillus <-lmtest::lrtest( m.all[[10]], m.time[[10]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Firmicutes_Lactobacillus <-lmtest::lrtest(m.all[[10]], m.treatment[[10]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(10,10)] <- p.interaction.Firmicutes_Lactobacillus
+p.values$p.treatment[c(10,10)] <- p.treatment.Firmicutes_Lactobacillus
+p.values$p.time[c(10,10)] <- p.time.Firmicutes_Lactobacillus
+
+## Okay we see no effect of anything, which is sad 
+
+write.table(p.values, file = "output/p.values.modelt1vst2.anal.excluded.tsv", sep ="\t", quote = F)
+```
+
+```{r eval=FALSE, include=FALSE}
+# check the stats and do multiple correction <- loop through the output
+library(emmeans)
+m.emm <- list()
+padjust <- list()
+for (i in 1:length(mod)){
+m.emm[[i]] <- emmeans(mod[[i]], pairwise ~ Treatment | meta_Time)}
+
+pad.Bacteroidetes_Paraprevotella <- contrast(m.emm[[1]][[1]], "trt.vs.ctrl") # sig diff. t2 treatment -control
+
+pad.Bacteroidetes_Prevotella <- contrast(m.emm[[2]], "trt.vs.ctrl") # ns
+
+pad.Bacteroidetes_Prevotella.1 <- contrast(m.emm[[3]], "trt.vs.ctrl") #ns
+
+pad.Bacteroidetes_Prevotella.2 <- contrast(m.emm[[4]], "trt.vs.ctrl") #ns
+
+pad.Bacteroidetes_Prevotella.6 <- contrast(m.emm[[5]], "trt.vs.ctrl") #ns
+
+pad.Bacteroidetes_Prevotella.9 <- contrast(m.emm[[6]], "trt.vs.ctrl") #ns
+
+pad.Actinobacteria_Gardnerella <- contrast(m.emm[[7]], "trt.vs.ctrl") #ns
+
+pad.Actinobacteria_Atopobium <- contrast(m.emm[[8]], "trt.vs.ctrl") #ns
+
+pad.Fusobacteria_Sneathia <- contrast(m.emm[[9]], "trt.vs.ctrl") #ns
+
+pad.Tenericutes_Ureaplasma <- contrast(m.emm[[10]], "trt.vs.ctrl") #ns
+
+pad.Tenericutes_Mycoplasma <- contrast(m.emm[[11]], "trt.vs.ctrl") #ns
+
+pad.Firmicutes_Lactobacillus <- contrast(m.emm[[12]], "trt.vs.ctrl") #ns
+
+
+```
+Calculate effect size Cliff's D
+```{r}
+library(tidyverse)
+mo.gen <- merge(gen.red, Anal_Swabs1, by = 0)
+row.names(mo.gen) <- mo.gen.1$Row.names
+mo.gen$Row.names <- NULL
+mo.gen$Treatment[is.na(mo.gen$Treatment)] <- "Control"
+
+
+cliff_d_2 <- as.data.frame(groups)
+cliff_d_2$one <- NA
+cliff_d_2$two <- NA
+# Effect size Treatment yes/no -> Cliffs Delta
+# Effect size meta_Time - > geht nicht so, aber wir können jeden Zeitpunkt separat
+source("~/Documents/Preterm_IceCream/final.analysis/Cliff_d.R")
+
+mo.gen$Treatment[is.na(mo.gen$Treatment)] <- "Control"
+sub.1 <- mo.gen %>%
+  dplyr::filter(mo.gen$t1vst2== "0")
+
+sub.2 <- mo.gen %>%
+  dplyr::filter(mo.gen$t1vst2== "1")
+
+### T1 vs T2
+uno <- sub.1$Tenericutes_Mycoplasma[sub.1$Treatment == "Treatment"] 
+duo <- sub.1$Tenericutes_Mycoplasma[sub.1$Treatment == "Control"] 
+# c <- CliffsDelta(control, treatment)
+cliff_d_2$one[c(9,9)] <- CliffsDelta(uno, duo)
+
+write.table(cliff_d_2, file = "output/cliffs_d_ct12_bacteria.anal.excluded.tsv", sep ="\t", quote = F)
+```
+# T2 VS T3
+```{r}
+mo.gen.2 <- merge(gen.red, Anal_Swabs2, by = 0)
+row.names(mo.gen.2) <- mo.gen.2$Row.names
+mo.gen.2$Row.names <- NULL
+mo.gen.2$Treatment[is.na(mo.gen.2$Treatment)] <- "Control"
+# one more time make sure everything is annotated correct for the model
+
+# mo.gen$meta_Time <- as.factor(mo.gen$meta_Time)
+# mo.gen$meta_Time <- fct_relevel(mo.gen$meta_Time, "TP1", "TP2", "TP3")
+mo.gen.2$t3vst3 <- as.character(mo.gen.2$t2vst3)
+mo.gen.2$Age_at_inclusion <- as.numeric(mo.gen.2$Age_at_inclusion)
+mo.gen.2$PatID <- as.factor(mo.gen.2$PatID)
+mo.gen.2$Swabsite <- as.factor(mo.gen.2$Swabsite)
+mo.gen.2$Previous_preterm_birth_Yes1_No0_and_GA <- as.factor(mo.gen.2$Previous_preterm_birth_Yes1_No0_and_GA)
+mo.gen.2$compliance <- as.factor(mo.gen.2$compliance)
+mo.gen.2$compliance <- fct_relevel(mo.gen.2$compliance, "control", "none", "poor", "good", "excellent")
+mo.gen.2$Spontaneous_1_Induced_birth_0 <- as.factor(mo.gen.2$Spontaneous_1_Induced_birth_0)
+# save(mo.gen, file = "mo.gen.all.r")
+mo.gen.2$Antibiotics_during_pregnancy_Yes1_No0 <- as.factor(mo.gen.2$Antibiotics_during_pregnancy_Yes1_No0)
+# subset to vagina
+mo.gen.2 <- mo.gen.2[, c(1:18,21,23, 29)]
+mo.gen.2$Swabsite <-NULL
+mo.gen.2$meta_Time <-NULL
+```
+
+```{r}
+mo.gen.2 %>%
+  reshape2::melt(id.vars=c("Sampl_ID", "PatID", "t2vst3", "Treatment", "BMI", "Age_at_inclusion", "Previous_preterm_birth_Yes1_No0_and_GA", "compliance", "Antibiotics_during_pregnancy_Yes1_No0")) -> mo.gen.2
+mo.gen.2$value <- as.numeric(mo.gen.2$value)
+mo.gen.2$t2vst3 <- as.factor(mo.gen.2$t2vst3)
+mo.gen.2$Treatment <- as.factor(mo.gen.2$Treatment)
+```
+# loop
+loop through the whole data set and build models
+
+```{r}
+library(lmerTest)
+# loop the variables
+groups <- unique(mo.gen.2$variable)
+mod <- list()    
+Beta_0 <- rep(0, length(groups))
+Beta_1 <- rep(0, length(groups))
+
+for (i in seq_along(groups)){
+mod[[i]] <- lmer(value ~ t2vst3 + Treatment + (1 | PatID) + (1 | Age_at_inclusion) + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t2vst3, data = mo.gen.2, REML = F, subset = variable == groups[i])
+}
+
+# loop the variables
+groups <- unique(mo.gen.2$variable)
+summary.mod <- list()    
+Beta_0 <- rep(0, length(groups))
+Beta_1 <- rep(0, length(groups))
+
+for (i in seq_along(groups)){
+summary.mod[[i]] <- summary(lmer(value ~ t2vst3 + Treatment + (1 | PatID) + (1 | Age_at_inclusion) + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t2vst3, data = mo.gen.2, REML = F, subset = variable == groups[i]))
+}
+
+save(mod, file = "data/mod.all.2.anal.excluded.r")
+save(summary.mod, file = "data/summary.mod.2.analexcluded.r")
+```
+
+
+```{r}
+m.all <- list()
+m.time <- list()
+m.main <- list()
+m.treatment <- list()
+
+
+# something is wrong with pat.9
+groups <- unique(mo.gen.2$variable)
+
+for (i in 1:length(mod)){
+m.main[[i]] <- lmerTest::lmer(value ~ t2vst3 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Antibiotics_during_pregnancy_Yes1_No0 , data = mo.gen.2, REML = F, subset = variable == groups[i])
+
+m.all[[i]] <- lmerTest::lmer(value ~ Treatment + t2vst3 + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t2vst3, data = mo.gen.2, REML = F, subset = variable == groups[i])
+
+m.time[[i]] <- lmerTest::lmer(value ~ t2vst3 + (1 | PatID)+(1 | Age_at_inclusion) + BMI + Antibiotics_during_pregnancy_Yes1_No0 +Treatment:t2vst3, data = mo.gen.2, REML = F, subset = variable == groups[i])
+
+m.treatment[[i]] <- lmerTest::lmer(value ~ Treatment + (1 | PatID)+(1 | Age_at_inclusion)   + BMI + Antibiotics_during_pregnancy_Yes1_No0 +Treatment:t2vst3, data = mo.gen.2, REML = F, subset = variable == groups[i])
+}
+
+# empty dataframe
+p.values <- as.data.frame(groups)
+p.values$p.treatment <- NA
+p.values$p.time <- NA
+p.values$p.interaction <- NA
+## Bacteroidetes_Prevotella.6 ##
+Bacteroidetes_Paraprevotella.main <- m.main[[1]]
+Bacteroidetes_Paraprevotella.all <- m.all[[1]]
+Bacteroidetes_Paraprevotella.time <- m.time[[1]]
+Bacteroidetes_Paraprevotella.treatment <- m.treatment[[1]]
+
+# vergleiche die models
+p.interaction.Bacteroidetes_Paraprevotella <-lmtest::lrtest(Bacteroidetes_Paraprevotella.all, Bacteroidetes_Paraprevotella.main)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.treatment.Bacteroidetes_Paraprevotella <-lmtest::lrtest(Bacteroidetes_Paraprevotella.all, Bacteroidetes_Paraprevotella.time)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.time.Bacteroidetes_Paraprevotella <-lmtest::lrtest(Bacteroidetes_Paraprevotella.all, Bacteroidetes_Paraprevotella.treatment)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(1,1)] <- p.interaction.Bacteroidetes_Paraprevotella
+p.values$p.treatment[c(1,1)] <- p.treatment.Bacteroidetes_Paraprevotella
+p.values$p.time[c(1,1)] <- p.treatment.Bacteroidetes_Paraprevotella
+
+## Bacteroidetes_Prevotella.9 ##
+
+p.interaction.Bacteroidetes_Prevotella <-lmtest::lrtest( m.all[[2]], m.main[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Bacteroidetes_Prevotella <-lmtest::lrtest( m.all[[2]], m.time[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella <-lmtest::lrtest(m.all[[2]], m.treatment[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(2,2)] <- p.interaction.Bacteroidetes_Prevotella
+p.values$p.treatment[c(2,2)] <- p.treatment.Bacteroidetes_Prevotella
+p.values$p.time[c(2,2)] <- p.time.Bacteroidetes_Prevotella
+
+
+## Bacteroidetes_Prevotella ##
+p.interaction.Bacteroidetes_Prevotella.6 <-lmtest::lrtest( m.all[[3]], m.main[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Bacteroidetes_Prevotella.6 <-lmtest::lrtest( m.all[[3]], m.time[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella.6 <-lmtest::lrtest(m.all[[3]], m.treatment[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(3,3)] <- p.interaction.Bacteroidetes_Prevotella.6
+p.values$p.treatment[c(3,3)] <- p.treatment.Bacteroidetes_Prevotella.6
+p.values$p.time[c(3,3)] <- p.time.Bacteroidetes_Prevotella.6
+
+
+## Bacteroidetes_Prevotella.9 ##
+p.interaction.Bacteroidetes_Prevotella.9 <-lmtest::lrtest( m.all[[4]], m.main[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Bacteroidetes_Prevotella.9 <-lmtest::lrtest( m.all[[4]], m.time[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella.9 <-lmtest::lrtest(m.all[[4]], m.treatment[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(4,4)] <- p.interaction.Bacteroidetes_Prevotella.9
+p.values$p.treatment[c(4,4)] <- p.treatment.Bacteroidetes_Prevotella.9
+p.values$p.time[c(4,4)] <- p.time.Bacteroidetes_Prevotella.9
+
+
+## Actinobacteria_Gardnerellam ##
+p.interaction.Actinobacteria_Gardnerella <-lmtest::lrtest( m.all[[5]], m.main[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Actinobacteria_Gardnerella <-lmtest::lrtest( m.all[[5]], m.time[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Actinobacteria_Gardnerella <-lmtest::lrtest(m.all[[5]], m.treatment[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(5,5)] <- p.interaction.Actinobacteria_Gardnerella
+p.values$p.treatment[c(5,5)] <- p.treatment.Actinobacteria_Gardnerella
+p.values$p.time[c(5,5)] <- p.time.Actinobacteria_Gardnerella
+
+
+## Actinobacteria_Atopobium ##
+p.interaction.Actinobacteria_Atopobium <-lmtest::lrtest( m.all[[6]], m.main[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Actinobacteria_Atopobium <-lmtest::lrtest( m.all[[6]], m.time[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Actinobacteria_Atopobium <-lmtest::lrtest(m.all[[6]], m.treatment[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(6,6)] <- p.interaction.Actinobacteria_Atopobium
+p.values$p.treatment[c(6,6)] <- p.treatment.Actinobacteria_Atopobium
+p.values$p.time[c(6,6)] <- p.time.Actinobacteria_Atopobium
+
+
+## Fusobacteria_Sneathia ##
+p.interaction.Fusobacteria_Sneathia <-lmtest::lrtest( m.all[[7]], m.main[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Fusobacteria_Sneathia <-lmtest::lrtest( m.all[[7]], m.time[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Fusobacteria_Sneathia <-lmtest::lrtest(m.all[[7]], m.treatment[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(7,7)] <- p.interaction.Fusobacteria_Sneathia
+p.values$p.treatment[c(7,7)] <- p.treatment.Fusobacteria_Sneathia
+p.values$p.time[c(7,7)] <- p.time.Fusobacteria_Sneathia
+
+
+## Tenericutes_Ureaplasma ##
+p.interaction.Tenericutes_Ureaplasma <-lmtest::lrtest( m.all[[8]], m.main[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Tenericutes_Ureaplasma <-lmtest::lrtest( m.all[[8]], m.time[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Tenericutes_Ureaplasma <-lmtest::lrtest(m.all[[8]], m.treatment[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(8,8)] <- p.interaction.Tenericutes_Ureaplasma
+p.values$p.treatment[c(8,8)] <- p.treatment.Tenericutes_Ureaplasma
+p.values$p.time[c(8,8)] <- p.time.Tenericutes_Ureaplasma
+
+
+## Tenericutes_Mycoplasma ##
+p.interaction.Tenericutes_Mycoplasma <-lmtest::lrtest( m.all[[9]], m.main[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Tenericutes_Mycoplasma <-lmtest::lrtest( m.all[[9]], m.time[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Tenericutes_Mycoplasma <-lmtest::lrtest(m.all[[9]], m.treatment[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(9,9)] <- p.interaction.Tenericutes_Mycoplasma
+p.values$p.treatment[c(9,9)] <- p.treatment.Tenericutes_Mycoplasma
+p.values$p.time[c(9,9)] <- p.time.Tenericutes_Mycoplasma
+
+## Firmicutes_Lactobacillus ##
+p.interaction.Firmicutes_Lactobacillus <-lmtest::lrtest( m.all[[10]], m.main[[10]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Firmicutes_Lactobacillus <-lmtest::lrtest( m.all[[10]], m.time[[10]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Firmicutes_Lactobacillus <-lmtest::lrtest(m.all[[10]], m.treatment[[10]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(10,10)] <- p.interaction.Firmicutes_Lactobacillus
+p.values$p.treatment[c(10,10)] <- p.treatment.Firmicutes_Lactobacillus
+p.values$p.time[c(10,10)] <- p.time.Firmicutes_Lactobacillus
+
+write.table(p.values, file = "output/p.values.modelt2vst3.anal.excluded.tsv", sep ="\t", quote = F)
+```
+Calculate effect size Cliff's D
+```{r}
+library(tidyverse)
+
+
+mo.gen <- merge(gen.red, Anal_Swabs2, by = 0)
+row.names(mo.gen) <- mo.gen$Row.names
+mo.gen$Row.names <- NULL
+mo.gen$Treatment[is.na(mo.gen$Treatment)] <- "Control"
+
+
+cliff_d_3 <- as.data.frame(groups)
+cliff_d_3$t2_3 <- NA
+cliff_d_3$c2_3 <- NA
+# Effect size Treatment yes/no -> Cliffs Delta
+# Effect size meta_Time - > geht nicht so, aber wir können jeden Zeitpunkt separat
+source("~/Documents/Preterm_IceCream/final.analysis/Cliff_d.R")
+
+
+
+sub.2 <- mo.gen %>%
+  dplyr::filter(mo.gen$t2vst3== "0")
+
+sub.3 <- mo.gen %>%
+  dplyr::filter(mo.gen$t2vst3== "1")
+
+### T1 vs T2
+uno <- sub.2$Firmicutes_Lactobacillus[sub.2$Treatment == "Treatment"] 
+duo <- sub.3$Firmicutes_Lactobacillus[sub.3$Treatment == "Treatment"] 
+# c <- CliffsDelta(control, treatment)
+cliff_d_3$t2_3[c(10,10)] <- CliffsDelta(uno, duo)
+
+write.table(cliff_d_3, file = "output/cliffs_d_ct2_3_bacteria.anal.excluded.tsv", sep ="\t", quote = F)
+```
+# T1 VS T3
+```{r}
+mo.gen.3 <- merge(gen.red, Anal_Swabs3, by = 0)
+row.names(mo.gen.3) <- mo.gen.3$Row.names
+mo.gen.3$Row.names <- NULL
+mo.gen.3$Treatment[is.na(mo.gen.3$Treatment)] <- "Control"
+# one more time make sure everything is annotated correct for the model
+
+# mo.gen$meta_Time <- as.factor(mo.gen$meta_Time)
+# mo.gen$meta_Time <- fct_relevel(mo.gen$meta_Time, "TP1", "TP2", "TP3")
+mo.gen.3$t1vst3 <- as.character(mo.gen.3$t1vst3)
+mo.gen.3$Age_at_inclusion <- as.numeric(mo.gen.3$Age_at_inclusion)
+mo.gen.3$PatID <- as.factor(mo.gen.3$PatID)
+mo.gen.3$Swabsite <- as.factor(mo.gen.3$Swabsite)
+mo.gen.3$Previous_preterm_birth_Yes1_No0_and_GA <- as.factor(mo.gen.3$Previous_preterm_birth_Yes1_No0_and_GA)
+mo.gen.3$compliance <- as.factor(mo.gen.3$compliance)
+mo.gen.3$compliance <- fct_relevel(mo.gen.3$compliance, "control", "none", "poor", "good", "excellent")
+mo.gen.3$Spontaneous_1_Induced_birth_0 <- as.factor(mo.gen.3$Spontaneous_1_Induced_birth_0)
+# save(mo.gen, file = "mo.gen.all.r")
+mo.gen.3$Antibiotics_during_pregnancy_Yes1_No0 <- as.factor(mo.gen.3$Antibiotics_during_pregnancy_Yes1_No0)
+# subset to vagina
+mo.gen.3 <- mo.gen.3[, c(1:18,21,23, 29)]
+mo.gen.3$Swabsite <-NULL
+mo.gen.3$meta_Time <-NULL
+```
+```{r}
+mo.gen.3 %>%
+  reshape2::melt(id.vars=c("Sampl_ID", "PatID", "t1vst3", "Treatment", "BMI", "Age_at_inclusion", "Previous_preterm_birth_Yes1_No0_and_GA", "compliance", "Antibiotics_during_pregnancy_Yes1_No0")) -> mo.gen.3
+mo.gen.3$value <- as.numeric(mo.gen.3$value)
+```
+loop through the whole data set and build models
+
+```{r}
+library(lmerTest)
+# loop the variables
+groups <- unique(mo.gen.3$variable)
+mod <- list()    
+Beta_0 <- rep(0, length(groups))
+Beta_1 <- rep(0, length(groups))
+
+for (i in seq_along(groups)){
+mod[[i]] <- lmer(value ~ t1vst3 + Treatment + (1 | PatID) + (1 | Age_at_inclusion) + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t1vst3, data = mo.gen.3, REML = F, subset = variable == groups[i])
+}
+
+# loop the variables
+groups <- unique(mo.gen.3$variable)
+summary.mod <- list()    
+Beta_0 <- rep(0, length(groups))
+Beta_1 <- rep(0, length(groups))
+
+for (i in seq_along(groups)){
+summary.mod[[i]] <- summary(lmer(value ~ t1vst3 + Treatment + (1 | PatID) + (1 | Age_at_inclusion) + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t1vst3, data = mo.gen.3, REML = F, subset = variable == groups[i]))
+}
+
+save(mod, file = "data/mod.all.3anal.excluded.r")
+save(summary.mod, file = "data/summary.mod.3anal.excluded.r")
+```
+
+```{r}
+m.all <- list()
+m.time <- list()
+m.main <- list()
+m.treatment <- list()
+p.time <- list()
+p.treatment <- list()
+
+for (i in 1:length(mod)){
+m.main[[i]] <- lmerTest::lmer(value ~ t1vst3 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Antibiotics_during_pregnancy_Yes1_No0 , data = mo.gen.3, REML = F, subset = variable == groups[i])
+
+m.all[[i]] <- lmerTest::lmer(value ~ t1vst3 + Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI + Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t1vst3, data = mo.gen.3, REML = F, subset = variable == groups[i])
+
+m.time[[i]] <- lmerTest::lmer(value ~ t1vst3 + (1 | PatID)+(1 | Age_at_inclusion)   + BMI + Antibiotics_during_pregnancy_Yes1_No0 +Treatment:t1vst3, data = mo.gen.3,  REML = F, subset = variable == groups[i])
+
+m.treatment[[i]] <- lmerTest::lmer(value ~  Treatment + (1 | PatID)+(1 | Age_at_inclusion)  + BMI +Antibiotics_during_pregnancy_Yes1_No0 + Treatment:t1vst3, data = mo.gen.3, REML = F, subset = variable == groups[i]) 
+}
+
+# empty dataframe
+p.values <- as.data.frame(groups)
+p.values$p.interaction <- NA
+p.values$p.treatment <- NA
+p.values$p.time <- NA
+## Bacteroidetes_Prevotella.6 ##
+Bacteroidetes_Paraprevotella.main <- m.main[[1]]
+Bacteroidetes_Paraprevotella.all <- m.all[[1]]
+Bacteroidetes_Paraprevotella.time <- m.time[[1]]
+Bacteroidetes_Paraprevotella.treatment <- m.treatment[[1]]
+
+# vergleiche die models
+p.interaction.Bacteroidetes_Paraprevotella <-lmtest::lrtest(Bacteroidetes_Paraprevotella.all, Bacteroidetes_Paraprevotella.main)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.treatment.Bacteroidetes_Paraprevotella <-lmtest::lrtest(Bacteroidetes_Paraprevotella.all, Bacteroidetes_Paraprevotella.time)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.time.Bacteroidetes_Paraprevotella <-lmtest::lrtest(Bacteroidetes_Paraprevotella.all, Bacteroidetes_Paraprevotella.treatment)$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(1,1)] <- p.interaction.Bacteroidetes_Paraprevotella
+p.values$p.treatment[c(1,1)] <- p.treatment.Bacteroidetes_Paraprevotella
+p.values$p.time[c(1,1)] <- p.treatment.Bacteroidetes_Paraprevotella
+
+## Bacteroidetes_Prevotella.9 ##
+
+p.interaction.Bacteroidetes_Prevotella <-lmtest::lrtest( m.all[[2]], m.main[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Bacteroidetes_Prevotella <-lmtest::lrtest( m.all[[2]], m.time[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella <-lmtest::lrtest(m.all[[2]], m.treatment[[2]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(2,2)] <- p.interaction.Bacteroidetes_Prevotella
+p.values$p.treatment[c(2,2)] <- p.treatment.Bacteroidetes_Prevotella
+p.values$p.time[c(2,2)] <- p.time.Bacteroidetes_Prevotella
+
+
+## Bacteroidetes_Prevotella ##
+p.interaction.Bacteroidetes_Prevotella.6 <-lmtest::lrtest( m.all[[3]], m.main[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Bacteroidetes_Prevotella.6 <-lmtest::lrtest( m.all[[3]], m.time[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella.6 <-lmtest::lrtest(m.all[[3]], m.treatment[[3]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(3,3)] <- p.interaction.Bacteroidetes_Prevotella.6
+p.values$p.treatment[c(3,3)] <- p.treatment.Bacteroidetes_Prevotella.6
+p.values$p.time[c(3,3)] <- p.time.Bacteroidetes_Prevotella.6
+
+
+## Bacteroidetes_Prevotella.9 ##
+p.interaction.Bacteroidetes_Prevotella.9 <-lmtest::lrtest( m.all[[4]], m.main[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Bacteroidetes_Prevotella.9 <-lmtest::lrtest( m.all[[4]], m.time[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Bacteroidetes_Prevotella.9 <-lmtest::lrtest(m.all[[4]], m.treatment[[4]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(4,4)] <- p.interaction.Bacteroidetes_Prevotella.9
+p.values$p.treatment[c(4,4)] <- p.treatment.Bacteroidetes_Prevotella.9
+p.values$p.time[c(4,4)] <- p.time.Bacteroidetes_Prevotella.9
+
+
+## Actinobacteria_Gardnerellam ##
+p.interaction.Actinobacteria_Gardnerella <-lmtest::lrtest( m.all[[5]], m.main[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Actinobacteria_Gardnerella <-lmtest::lrtest( m.all[[5]], m.time[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Actinobacteria_Gardnerella <-lmtest::lrtest(m.all[[5]], m.treatment[[5]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(5,5)] <- p.interaction.Actinobacteria_Gardnerella
+p.values$p.treatment[c(5,5)] <- p.treatment.Actinobacteria_Gardnerella
+p.values$p.time[c(5,5)] <- p.time.Actinobacteria_Gardnerella
+
+
+## Actinobacteria_Atopobium ##
+p.interaction.Actinobacteria_Atopobium <-lmtest::lrtest( m.all[[6]], m.main[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Actinobacteria_Atopobium <-lmtest::lrtest( m.all[[6]], m.time[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Actinobacteria_Atopobium <-lmtest::lrtest(m.all[[6]], m.treatment[[6]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(6,6)] <- p.interaction.Actinobacteria_Atopobium
+p.values$p.treatment[c(6,6)] <- p.treatment.Actinobacteria_Atopobium
+p.values$p.time[c(6,6)] <- p.time.Actinobacteria_Atopobium
+
+
+## Fusobacteria_Sneathia ##
+p.interaction.Fusobacteria_Sneathia <-lmtest::lrtest( m.all[[7]], m.main[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Fusobacteria_Sneathia <-lmtest::lrtest( m.all[[7]], m.time[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Fusobacteria_Sneathia <-lmtest::lrtest(m.all[[7]], m.treatment[[7]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(7,7)] <- p.interaction.Fusobacteria_Sneathia
+p.values$p.treatment[c(7,7)] <- p.treatment.Fusobacteria_Sneathia
+p.values$p.time[c(7,7)] <- p.time.Fusobacteria_Sneathia
+
+
+## Tenericutes_Ureaplasma ##
+p.interaction.Tenericutes_Ureaplasma <-lmtest::lrtest( m.all[[8]], m.main[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Tenericutes_Ureaplasma <-lmtest::lrtest( m.all[[8]], m.time[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Tenericutes_Ureaplasma <-lmtest::lrtest(m.all[[8]], m.treatment[[8]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(8,8)] <- p.interaction.Tenericutes_Ureaplasma
+p.values$p.treatment[c(8,8)] <- p.treatment.Tenericutes_Ureaplasma
+p.values$p.time[c(8,8)] <- p.time.Tenericutes_Ureaplasma
+
+
+## Tenericutes_Mycoplasma ##
+p.interaction.Tenericutes_Mycoplasma <-lmtest::lrtest( m.all[[9]], m.main[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Tenericutes_Mycoplasma <-lmtest::lrtest( m.all[[9]], m.time[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Tenericutes_Mycoplasma <-lmtest::lrtest(m.all[[9]], m.treatment[[9]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(9,9)] <- p.interaction.Tenericutes_Mycoplasma
+p.values$p.treatment[c(9,9)] <- p.treatment.Tenericutes_Mycoplasma
+p.values$p.time[c(9,9)] <- p.time.Tenericutes_Mycoplasma
+
+## Firmicutes_Lactobacillus ##
+p.interaction.Firmicutes_Lactobacillus <-lmtest::lrtest( m.all[[10]], m.main[[10]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.treatment.Firmicutes_Lactobacillus <-lmtest::lrtest( m.all[[10]], m.time[[10]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+p.time.Firmicutes_Lactobacillus <-lmtest::lrtest(m.all[[10]], m.treatment[[10]])$'Pr(>Chisq)' # das beduetet Treatment hat keine effect # 1
+
+p.values$p.interaction[c(10,10)] <- p.interaction.Firmicutes_Lactobacillus
+p.values$p.treatment[c(10,10)] <- p.treatment.Firmicutes_Lactobacillus
+p.values$p.time[c(10,10)] <- p.time.Firmicutes_Lactobacillus
+
+
+write.table(p.values, file = "output/p.values.modelt1vst3anal.excluded.tsv", sep ="\t", quote = F)
+```
+
+Calculate effect size Cliff's D
+```{r}
+library(tidyverse)
+
+mo.gen <- merge(gen.red, Anal_Swabs3, by = 0)
+row.names(mo.gen) <- mo.gen$Row.names
+mo.gen$Row.names <- NULL
+mo.gen$Treatment[is.na(mo.gen$Treatment)] <- "Control"
+
+cliff_d_4 <- as.data.frame(groups)
+cliff_d_4$t1_3 <- NA
+cliff_d_4$c1_3 <- NA
+# Effect size Treatment yes/no -> Cliffs Delta
+# Effect size meta_Time - > geht nicht so, aber wir können jeden Zeitpunkt separat
+source("~/Documents/Preterm_IceCream/final.analysis/Cliff_d.R")
+
+
+sub.1 <- mo.gen %>%
+  dplyr::filter(mo.gen$t1vst3== "0")
+
+sub.3 <- mo.gen %>%
+  dplyr::filter(mo.gen$t1vst3== "1")
+
+### T1 vs T2
+uno <- sub.1$Firmicutes_Lactobacillus[sub.1$Treatment == "Treatment"] 
+duo <- sub.3$Firmicutes_Lactobacillus[sub.3$Treatment == "Treatment"] 
+# c <- CliffsDelta(control, treatment)
+cliff_d_4$t1_3[c(10,10)] <- CliffsDelta(uno, duo)
+
+
+
+write.table(cliff_d_4, file = "output/cliffs_d_tc1_3_bacteria.anal.excluded.tsv", sep ="\t", quote = F)
+```
+
+The ggeffects package computes estimated marginal means (predicted values) for the response. Visualize predictions from the multiple regression models.
+loop through the 9 bacteria we are interested in 
+```{r eval=FALSE, include=FALSE}
+ppre <- list()
+dat <- list()
+for (i in 1:length(mod)){
+ppre[[i]] <- ggpredict(mod[[i]], c("meta_Time", "Treatment [Control,Treatment]"))
+dat[[i]] <- plot(ppre[[i]], add.data = T)
+dat[[i]] + scale_color_manual(values = kk.beta)+ # somehow this is not working in the loop
+  xlab("timepoint")+
+  theme (axis.title.x = element_blank (), 
+         axis.text.x = element_text (size = 13), 
+         axis.text.y = element_text (size = 13), 
+         axis.title.y = element_text (size = 13)) }
+
+ppr1 <- dat[[1]]+ scale_color_manual(values = kk.beta)+ ggtitle("Predicted Bacteroidetes_Prevotella.6 \n of Treatment vs. Control")
+ppr2 <- dat[[2]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Bacteroidetes_Prevotella.9 \n of Treatment vs. Control")
+
+ppr3 <- dat[[3]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Bacteroidetes_Prevotella \n of Treatment vs. Control")
+
+ppr4 <- dat[[4]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Actinobacteria_Gardnerella \n of Treatment vs. Control")
+
+ppr5 <- dat[[5]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Actinobacteria_Atopobium \n of Treatment vs. Control")
+
+ppr6 <- dat[[6]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Fusobacteria_Sneathia \n of Treatment vs. Control")
+
+ppr7 <- dat[[7]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Tenericutes_Ureaplasma \n of Treatment vs. Control")
+
+ppr8 <- dat[[8]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Tenericutes_Mycoplasma \n of Treatment vs. Control")
+
+ppr9 <- dat[[9]]+ scale_color_manual(values = kk.beta)+
+  ggtitle("Firmicutes_Lactobacillus \n of Treatment vs. Control")
+
+ggsave(ppr1, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Bacteroidetes_Prevotella.6.predict.svg")
+ggsave(ppr2, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Bacteroidetes_Prevotella.9.predict.svg")
+ggsave(ppr3, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Bacteroidetes_Prevotella.predict.svg")
+ggsave(ppr4, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Actinobacteria_Gardnerella.predict.svg")
+ggsave(ppr5, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Actinobacteria_Atopobium.predict.svg")
+ggsave(ppr6, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Fusobacteria_Sneathia.predict.svg")
+ggsave(ppr7, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Tenericutes_Ureaplasma.predict.svg")
+ggsave(ppr8, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Tenericutes_Mycoplasma.predict.svg")
+ggsave(ppr9, width = 4, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/Firmicutes_Lactobacillus.predict.svg")
+```
+
+# conclusion
+we don't see an effect of Treatment on either Shannon and the tested bacteria.

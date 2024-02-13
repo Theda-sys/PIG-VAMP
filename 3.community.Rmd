@@ -1,0 +1,744 @@
+---
+title: "2022_iceCream"
+author: "Theda Bartolomaeus"
+date: "4/20/2022"
+output: html_document
+---
+Aim: to deep dive into the viginal - and anal-Swab microbiota and to analyse its 
+unique ecosystem in terms of changes during pregnancy.
+road map: Enterotyping of the AS and VS micobiota on baseline
+          Side by side (AS, VS) changes over the time during pregnancy (alpha &
+          beta div)
+sec. hypotheses: dose lactobacillus treatment changes anything? 
+
+# Load packages
+```{r, cache=TRUE, error=FALSE, results = "hide"}
+library(phyloseq)
+library(tidyverse)
+require(wesanderson)
+require(rstatix)
+library(cowplot)
+library(gridExtra)
+library(grid)
+library(doParallel)  
+library(ggsci)
+library(rtk)
+library(cluster)
+library(factoextra)
+library(vegan) 
+library(ggrepel)
+```
+# Read Data
+```{r, cache=TRUE, error=FALSE, results = "hide"}
+# here we use only the control samples!
+load("output/pam_inputv.r")
+load("output/pam_inputa.r")
+
+## genus table for all samples
+genus <- read.table(file = "output/excluded_genus_data.tsv", sep = "\t", header = T, row.names = 1)
+
+meta_Time <- read.table(file= "data/meta_Time.excluded_new.csv", sep = ",", header = T, row.names = 1)
+
+
+ac.v <- read.table("data/ac.v.tsv", sep = "\t", header = T, row.names = 1)
+ac.a <- read.table("data/ac.a.tsv", sep = "\t", header = T, row.names = 1)
+
+
+Vag_Swabs <- meta_Time[meta_Time$Swabsite == "Vag_Swabs", ]
+Ana_Swabs <- meta_Time[meta_Time$Swabsite == "Anal_Swabs", ]
+
+ac.v <- ac.v[ row.names(ac.v) %in% row.names(Vag_Swabs), ]
+ac.a <- ac.a[ row.names(ac.a) %in% row.names(Ana_Swabs), ]
+```
+```{r}
+getMyWesAndersonColor <- function(n, name) {
+  wesanderson::wes_palette(n, name = "GrandBudapest1",
+                           type = "continuous") }
+```
+
+
+# Prepare the phyloseq object to process the analysis, this object will contain all the information needed for alpha and beta div.
+# Look at the Beta diversity 
+
+# enterotyping anal_swabs - DMM
+# Try PAM clustering in the vaginal swabs - we use the control samples only. 
+maybe it would make sense to use all and than cluster 
+```{r}
+### Try PAM clustering in R, since this method is not as sensitive towards 
+### outliers
+# take the distance matrix from vegan package (used to determain beta-dive)
+## PAM WITH ALL THE VAGINA SAMPLES
+genus.v <- genus[row.names(genus) %in% row.names(ac.v), ]
+pam_input <- genus.v[, colSums(genus.v)>0] # remove colsums 0 
+pam_input$sampl <- row.names(pam_input)
+row.names(pam_input) <- pam_input$sampl
+pam_input$sampl <- NULL
+
+bray <- as.matrix(vegan::vegdist (pam_input, method = "bray", na.rm = T))
+pcoaE <- cmdscale (bray, k = 2)
+pcoaE <- as.data.frame(pcoaE)
+colnames(pcoaE) <- c("Dim1", "Dim2")
+## check for the optimal numbers of clusters
+fviz_nbclust(bray, FUNcluster = pam) # 320x 200
+```
+
+Optimal number of clusters seem to be 2
+```{r}
+pamcluster <- pam(bray, k =2)
+# Cluster numbers
+head(pamcluster$clustering)
+pam_object <- as.matrix(pamcluster$clustering)
+colnames(pam_object) <- c("cluster")
+cluster_md <- ac.v[rownames(ac.v) %in% rownames(pam_input), ]
+cluster_md <- merge(cluster_md, pam_object, by = 0)
+
+row.names(cluster_md) <- cluster_md$Row.names
+cluster_md$Row.names <- NULL
+cluster_md <- merge(cluster_md, pcoaE, by = 0)
+
+
+cluster_md$cluster <- as.character(cluster_md$cluster)
+cluster_md$meta_Time <- as.character(cluster_md$meta_Time)
+
+#### visualize - first all 
+centroids <- aggregate(cbind(Dim1,Dim2)~cluster,cluster_md,mean)
+
+pcoA <- ggplot (cluster_md, aes (x = Dim1, y = Dim2, color = cluster)) +
+  theme_classic () + 
+ scale_fill_manual(values = wes_palette("GrandBudapest2"))+
+  scale_color_manual(values = wes_palette("GrandBudapest2"))+
+  geom_point (aes (color = cluster), size = 3, alpha = 1) + 
+  xlab ("PCo 1") + ylab ("PCo 2")+ 
+  theme (axis.title.x = element_text (size = 13), 
+         axis.text.x = element_text (size = 13), 
+         axis.text.y = element_text (size = 13), 
+         axis.title.y = element_text (size = 13),
+         legend.position="bottom") +
+  stat_ellipse(aes(color = cluster)) + 
+  geom_point(data = centroids,
+             size = 5,
+             shape = 16,
+             color = "black") +# centroides hinzufügen
+  geom_point(data = centroids, 
+             size = 4, 
+             shape = 16)
+print(pcoA)
+ggsave(pcoA, width = 3, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/new_vag.cluster.svg")
+```
+
+```{r}
+
+res.fa.gen_v <- princomp(pam_input, scores = TRUE)
+
+
+PCA_contrib.1 <- res.fa.gen_v %>%
+  broom::tidy(matrix = "variables") %>%
+  dplyr::filter(PC == "1") %>%
+  slice_max(n=10, order_by = abs(value))
+
+PCA_contrib.1 %>%
+  mutate(column=fct_reorder(column, value)) %>%
+  ggplot(aes(x=value, y=column)) +
+  geom_segment(aes(x=value, xend=0, y=column, yend=column), color="black") +
+  geom_point(aes(size=3, color=value)) +
+  scale_color_gradient2 (low = "#0C4C00", high = "#65014B", mid = "white", midpoint = 0) +
+  theme_bw() +
+  geom_vline(xintercept = 0, linetype = 2, color="grey40") +
+  scale_x_continuous(labels = scales::percent) +
+  xlab("Contribution to PC1") +
+  ylab("Parameter") -> p1.con
+```
+
+
+
+
+# lets have a look at the effect of compliance in the treatment
+```{r}
+#### now look at the distributions of the pulmotypes amoung the two studie cohort 
+cluster_md$cluster[cluster_md$cluster == 1] <- "Community Type 1"
+cluster_md$cluster[cluster_md$cluster == 2] <- "Community Type 2"
+cluster_md$Treatment[cluster_md$compliance == "None"] <- "none"
+
+cluster_md <- cluster_md %>%
+  dplyr::filter(cluster_md$meta_Time != "TP4") 
+
+write.table(cluster_md, file = "data/md.cluster.vagina.tsv", sep = "\t", quote = F)
+
+cluster_md.pim <- read.table(file = "data/md.cluster.vagina.tsv", sep = "\t", header = T, row.names = 1)
+
+cluster_md.pim %>%
+  drop_na() -> cluster_md.pim 
+
+cluster_md.pim$comp_pimed[cluster_md.pim$comp_pimed == "0"] <- "control"
+cluster_md.pim$comp_pimed[cluster_md.pim$comp_pimed == "1"] <- "good complied to treatment"
+cluster_md.pim$comp_pimed <- forcats::fct_relevel(cluster_md.pim$comp_pimed,  "control", "good complied to treatment")
+  
+reshape2::melt(t(apply(table (cluster_md.pim$comp_pimed, cluster_md.pim$cluster),
+                         1, function(x) x/sum(x)))) -> aframe
+
+
+
+heatmap.vaa.com <- ggplot (aframe, aes (x = Var1, y = Var2)) +
+  theme_classic () +
+  theme (axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+         legend.position = "none", 
+         axis.title = element_blank()) +
+  geom_tile (aes (fill = value), colour = "black") +
+  geom_text (aes (label = scales::percent(value, accuracy = 1))) +
+  scale_fill_gradient(high =  "#E6A0C4", low =  "#7294D4") 
+# scale_color_brewer(palette = "PiYG") +
+print(heatmap.vaa.com) 
+
+q <- print(chisq.test (table (cluster_md.pim$comp_pimed, cluster_md.pim$cluster))) # 0.1607
+
+ggsave(heatmap.vaa.com, width = 3, height = 1.5, dpi = 300, device = "svg", filename = "figures/new.figures/heatmap.vaa.com.time.svg")
+
+cluster_md$meta_Time <- forcats::fct_relevel(cluster_md$meta_Time,  "TP1", "TP2", "TP3")
+heat.col <- c("#ECCBAE", "#D69C4E")
+aFrame_vag <- reshape2::melt(t(apply(table (cluster_md$meta_Time, cluster_md$cluster),
+                         1, function(x) x/sum(x))))
+
+aFrame_vag <- aFrame_vag %>%
+  dplyr::filter(aFrame_vag$Var1 != "TP4") 
+
+heatmap.vag <- ggplot (aFrame_vag, aes (x = Var1, y = Var2)) +
+  theme_classic () +
+  theme (axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+         legend.position = "none", 
+         axis.title = element_blank()) +
+  geom_tile (aes (fill = value), colour = "black") +
+  geom_text (aes (label = scales::percent(value, accuracy = 1))) +
+  scale_fill_gradient(high =  "#E6A0C4", low =  "#7294D4") 
+# scale_color_brewer(palette = "PiYG") +
+print(heatmap.vag) 
+
+ggsave(heatmap.vag, width = 3, height = 1.5, dpi = 300, device = "svg", filename = "figures/new.figures/new.heatmap.vagr.time.svg")
+
+
+
+
+
+
+
+
+cluster_md$meta_Time <- forcats::fct_relevel(cluster_md$meta_Time,  "TP1", "TP2", "TP3")
+heat.col <- c("#ECCBAE", "#D69C4E")
+aFrame_vag <- reshape2::melt(t(apply(table (cluster_md$meta_Time, cluster_md$cluster),
+                         1, function(x) x/sum(x))))
+
+aFrame_vag <- aFrame_vag %>%
+  dplyr::filter(aFrame_vag$Var1 != "TP4") 
+
+heatmap.vag <- ggplot (aFrame_vag, aes (x = Var1, y = Var2)) +
+  theme_classic () +
+  theme (axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+         legend.position = "none", 
+         axis.title = element_blank()) +
+  geom_tile (aes (fill = value), colour = "black") +
+  geom_text (aes (label = scales::percent(value, accuracy = 1))) +
+  scale_fill_gradient(high =  "#E6A0C4", low =  "#7294D4") 
+# scale_color_brewer(palette = "PiYG") +
+print(heatmap.vag) 
+
+ggsave(heatmap.vag, width = 3, height = 1.5, dpi = 300, device = "svg", filename = "figures/new.figures/new.heatmap.vagr.time.svg")
+
+q <- print(chisq.test (table (cluster_md$meta_Time, cluster_md$cluster))) # p-value =0.9595
+```
+
+
+# enterotyping anal_swabs - DMM
+# Try PAM clustering in the anal swabs 
+```{r}
+# subset anal swabs only 
+genus.a <- genus[row.names(genus) %in% row.names(ac.a), ]
+pam_input <- genus.a[, colSums(genus.a)>0] 
+#Genus only analswabs
+
+pam_input$sampl <- row.names(pam_input)
+row.names(pam_input) <- pam_input$sampl
+pam_input$sampl <- NULL
+
+bray <- as.matrix(vegdist (pam_input, method = "bray", na.rm = T))
+pcoaE <- cmdscale (bray, k = 2)
+pcoaE <- as.data.frame(pcoaE)
+colnames(pcoaE) <- c("Dim1", "Dim2")
+## check for the optimal numbers of clusters
+fviz_nbclust(bray, FUNcluster = pam)
+```
+
+
+```{r}
+pamclustera <- pam(bray, k =2)
+# Cluster numbers
+head(pamclustera$clustering)
+pam_objecta <- as.matrix(pamclustera$clustering)
+colnames(pam_objecta) <- c("cluster")
+cluster_mda <- ac.a[rownames(ac.a) %in% rownames(pam_input), ]
+cluster_mda <- merge(cluster_mda, pam_objecta, by = 0)
+
+row.names(cluster_mda) <- cluster_mda$Row.names
+cluster_mda$Row.names <- NULL
+cluster_mda <- merge(cluster_mda, pcoaE, by = 0)
+
+
+cluster_mda$cluster <- as.character(cluster_mda$cluster)
+cluster_mda$meta_Time <- as.character(cluster_mda$meta_Time)
+
+
+
+#### visualize 
+centroids <- aggregate(cbind(Dim1,Dim2)~cluster,cluster_mda,mean)
+
+pcoAa <- ggplot (cluster_mda, aes (x = Dim1, y = Dim2, color = cluster)) +
+  theme_classic () + 
+ scale_fill_manual(values = wes_palette("GrandBudapest1"))+
+  scale_color_manual(values = wes_palette("GrandBudapest1"))+
+  geom_point (aes (color = cluster), size = 3, alpha = 1) + 
+  xlab ("PCo 1") + ylab ("PCo 2")+ 
+  theme (axis.title.x = element_text (size = 13), 
+         axis.text.x = element_text (size = 13), 
+         axis.text.y = element_text (size = 13), 
+         axis.title.y = element_text (size = 13),
+         legend.position="bottom") +
+  stat_ellipse(aes(color = cluster)) + 
+  geom_point(data = centroids,
+             size = 5,
+             shape = 16,
+             color = "black") +# centroides hinzufügen
+  geom_point(data = centroids, 
+             size = 4, 
+             shape = 16)
+print(pcoAa)
+ggsave(pcoAa, width = 3, height = 3, dpi = 300, device = "svg", filename = "figures/new.figures/new.anal.cluster.svg")
+```
+```{r}
+#### now look at the distributions of the pulmotypes amoung the two studie cohort 
+cluster_mda <- cluster_mda %>%
+  dplyr::filter(cluster_mda$meta_Time != "TP4") 
+
+
+cluster_mda$cluster[cluster_mda$cluster == 1] <- "Community Type 1"
+cluster_mda$cluster[cluster_mda$cluster == 2] <- "Community Type 2"
+cluster_mda$compliance[cluster_mda$compliance == "None"] <- "none"
+
+cluster_mda$meta_Time <- forcats::fct_relevel(cluster_mda$meta_Time,  "TP1", "TP2", "TP3")
+
+aFrame_ana <- reshape2::melt(t(apply(table (cluster_mda$meta_Time, cluster_mda$cluster),
+                         1, function(x) x/sum(x))))
+heatmap.ana <- ggplot (aFrame_ana, aes (x = Var1, y = Var2)) +
+  theme_classic () +
+  theme (axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+         legend.position = "none", 
+         axis.title = element_blank()) +
+  geom_tile (aes (fill = value), colour = "black") +
+  geom_text (aes (label = scales::percent(value, accuracy = 1))) +
+  scale_fill_gradient(high =  "#D67236", low =  "#FD6467") 
+# scale_color_brewer(palette = "PiYG") +
+print(heatmap.ana) 
+
+ggsave(heatmap.ana, width = 3, height = 1.5, dpi = 300, device = "svg", filename = "figures/new.figures/new.heatmap.ana.time.svg")
+
+qq <- print(chisq.test (table (cluster_mda$meta_Time, cluster_mda$cluster))) # p-value = 0.4289
+```
+
+# what is characterizing the enterotypes
+Vagina community types described by relative abundance of Genera
+```{r}
+# use genus_table from community typing
+genus_community <- as.data.frame(genus.v)
+# reduce the dataset
+ad.index.keep <- which(colSums(genus_community)*100/(sum(genus_community)) > 0.01) 
+genus_community <- genus_community[, ad.index.keep]
+dim(genus_community)
+order(row.names(genus_community))
+genus_community <- as.data.frame(genus_community)
+genus_community$Smpl <- row.names(genus_community)
+genus_community <- genus_community[rownames(genus_community) %in% rownames(ac.v),]
+cluster_abundance <- merge(genus_community, pam_object, by = 0)
+row.names(cluster_abundance) <- cluster_abundance$Row.names
+cluster_abundance$Row.names <- NULL
+cluster_abundance$Smpl <- NULL
+
+# MEDIAN
+cluster_abundance_1 <-
+  apply(cluster_abundance[cluster_abundance$cluster == "1",-ncol(cluster_abundance)], 2, mean)
+cluster_abundance_2 <-
+ apply(cluster_abundance[cluster_abundance$cluster == "2",-ncol(cluster_abundance)], 2, mean)
+
+# merging
+cluster_merged <-
+  rbind(cluster_abundance_1,
+        cluster_abundance_2)
+
+## Plot the Abundance 
+cluster_rel <- cluster_merged
+cluster_rel <- as.data.frame(t(cluster_rel))
+cluster_rel <- apply(cluster_merged, 1, function(x) x/sum(x)) # rows 1 als prozente
+
+cluster_rel <- cluster_rel[names(sort(rowSums(cluster_rel), decreasing = TRUE)[1:15]), ]
+
+cluster_rel <- as.data.frame(cluster_rel)
+cluster_rel$Genus <- row.names(cluster_rel)
+for (i in 1:2) {
+ cluster_rel[, i] <- as.numeric(cluster_rel[, i])
+} # convert to numerical
+
+colnames(cluster_rel) <- c("community type 1", "community type 2", "Genus")
+molten_cluster_rel<- reshape2::melt(data = cluster_rel, id.vars = "Genus")
+molten_cluster_rel$labels <- scales::percent(molten_cluster_rel$value)
+
+
+#Dim1
+PCA_contrib.1 <-  molten_cluster_rel %>%
+  dplyr::filter(variable == "community type 1") %>%
+  slice_max(n=10, order_by = abs(value))
+
+PCA_contrib.1 %>%
+  mutate(Genus=fct_reorder(Genus, value)) %>%
+  ggplot(aes(x=value, y=Genus)) +
+  geom_segment(aes(x=value, xend=0, y=Genus, yend=Genus), color="black") +
+  geom_point(aes(size=3, color=value)) +
+  scale_color_gradient2 (low = "#0C4C00", high = "#65014B", mid = "#FF99FF", midpoint = 0) +
+  theme_bw() +
+  geom_vline(xintercept = 0, linetype = 2, color="grey40") +
+  scale_x_continuous(labels = scales::percent) +
+  ggtitle("Contribution to community type 1") +
+  ylab("") +
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14))-> p1.con
+
+#Dim1
+PCA_contrib.1 <-  molten_cluster_rel %>%
+  dplyr::filter(variable == "community type 2") %>%
+  slice_max(n=10, order_by = abs(value))
+
+PCA_contrib.1 %>%
+  mutate(Genus=fct_reorder(Genus, value)) %>%
+  ggplot(aes(x=value, y=Genus)) +
+  geom_segment(aes(x=value, xend=0, y=Genus, yend=Genus), color="black") +
+  geom_point(aes(size=3, color=value)) +
+  scale_color_gradient2 (low = "#0C4C00", high = "#65014B", mid = "#FF99FF", midpoint = 0) +
+  theme_bw() +
+  geom_vline(xintercept = 0, linetype = 2, color="grey40") +
+  scale_x_continuous(labels = scales::percent) +
+  ggtitle("Contribution to community type 2") +
+  ylab("") +
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14))-> p2.con
+
+
+cowplot::plot_grid(p1.con, p2.con, align = "hv")->pp
+ggsave(pp, width = 13, height = 5, dpi = 300, device = "svg", filename = "figures/new.figures/ contribution.community.va.svg")
+
+```
+other approach 
+```{r}
+
+getMyWesAndersonColor <- function(n, name) {
+  wesanderson::wes_palette(n, name = "GrandBudapest2",
+                           type = "continuous") }
+
+kk <- getMyWesAndersonColor(30, name = "GrandBudapest2")
+str(kk)
+
+variable <- list(
+  'community type 1' = "community type 1",
+  'community type 2' = "community type 2"
+)
+
+label_variable <- function(variable,value){
+  return(treatment[value])
+}
+
+phyla_bar <- ggplot(molten_cluster_rel, aes(fill = Genus, y = value, x = variable)) + 
+  geom_bar(position = "fill", stat = "identity", alpha = 0.8, colour = "black") +
+  facet_grid(~variable, 
+             scales = "free_x",
+             labeller = label_variable) +
+  ylab("Relative abundance") +
+  theme_classic() +
+  theme(panel.spacing = unit(0.5, "lines"),
+        plot.title = element_text(face = "bold"), #bold title
+        axis.title = element_blank(),
+        axis.text.x = element_text(angle = 90),
+        legend.text = element_text(face = "italic", size = 10), #italic legend
+        legend.title = element_text(face = "bold"),
+        text = element_text(size = 15),
+        strip.text.x = element_text(size = 15, face = "bold"),
+        plot.background = element_rect(fill = "transparent",
+                                       colour = NA_character_), # necessary to avoid drawing plot outline
+        legend.background = element_rect(fill = "transparent")) + 
+  guides(fill = guide_legend(title = "Genus", reverse = TRUE, ncol = 2)) +
+  scale_fill_manual(values = rev(kk)) +
+  scale_x_discrete(expand = c(0, 0)) + #expand adjusts margin around plot
+  scale_y_continuous(expand = c(0, 0))
+
+ggsave(phyla_bar, width = 11, height = 8, dpi = 300, device = "svg", filename = "figures/new.figures/phyla_bar.va.svg")
+
+```
+
+
+
+
+
+
+```{r}
+
+getMyWesAndersonColor <- function(n, name) {
+  wesanderson::wes_palette(n, name = "GrandBudapest2",
+                           type = "continuous") }
+
+
+data <- molten_cluster_rel
+data.1 <- data %>%
+ dplyr::filter(variable == "community type 1")
+data.1$value <- as.numeric(data.1$value)
+data.1$value <- round(data.1$value, digits = 2)
+
+# Compute the position of labels
+
+data.1 <- data.1 %>% 
+  mutate(csum = rev(cumsum(rev(value))), 
+         pos = value/2 + lead(csum, 1),
+         pos = if_else(is.na(pos), value/2, pos))
+
+plot.vag.com.1 <- ggplot(data.1, aes(x = "" , y = value, fill = Genus)) +
+  geom_col(width = 1, color = 1) +
+  coord_polar(theta = "y") +
+  geom_label_repel(data = data.1,
+                   aes(y = pos, label = Genus),
+                   size = 3, nudge_x = 1, show.legend = FALSE) +
+  guides(fill = guide_legend(title = "Genus")) +
+  theme_void()+
+  scale_fill_manual(values = getMyWesAndersonColor(15))
+
+data.2 <- data %>%
+ dplyr::filter(variable == "community type 2")
+data.2$value <- as.numeric(data.2$value)
+data.2$value <- round(data.2$value, digits = 2)
+
+# Compute the position of labels
+
+data.2 <- data.2 %>% 
+  mutate(csum = rev(cumsum(rev(value))), 
+         pos = value/2 + lead(csum, 1),
+         pos = if_else(is.na(pos), value/2, pos))
+
+plot.vag.com.2 <- ggplot(data.2, aes(x = "" , y = value, fill = Genus)) +
+  geom_col(width = 1, color = 1) +
+  coord_polar(theta = "y") +
+  geom_label_repel(data = data.2,
+                   aes(y = pos, label = Genus),
+                   size = 3, nudge_x = 1, show.legend = FALSE) +
+  guides(fill = guide_legend(title = "Genus")) +
+  theme_void()+
+  scale_fill_manual(values = getMyWesAndersonColor(15))
+```
+Anal community types described by relative abundance of Genera
+```{r}
+# use genus_table from community typing
+genus_communitya <- as.data.frame(genus.a)
+# reduce the dataset
+ad.index.keep <- which(colSums(genus_communitya)*100/(sum(genus_communitya)) > 0.01) 
+genus_communitya <- genus_communitya[, ad.index.keep]
+dim(genus_communitya)
+order(row.names(genus_communitya))
+genus_communitya <- as.data.frame(genus_communitya)
+genus_communitya$Smpl <- row.names(genus_communitya)
+genus_communitya <- genus_communitya[rownames(genus_communitya) %in% rownames(ac.a),]
+cluster_abundancea <- merge(genus_communitya, pam_objecta, by = 0)
+row.names(cluster_abundancea) <- cluster_abundancea$Row.names
+cluster_abundancea$Row.names <- NULL
+cluster_abundancea$Smpl <- NULL
+
+# MEDIAN
+cluster_abundance_1a <-
+  apply(cluster_abundancea[cluster_abundancea$cluster == "1",-ncol(cluster_abundancea)], 2, mean)
+cluster_abundance_2a <-
+ apply(cluster_abundancea[cluster_abundancea$cluster == "2",-ncol(cluster_abundancea)], 2, mean)
+
+# merging
+cluster_mergeda <-
+  rbind(cluster_abundance_1a,
+        cluster_abundance_2a)
+
+
+## Plot the Abundance 
+cluster_rela <- cluster_mergeda
+cluster_rela <- as.data.frame(t(cluster_rela))
+cluster_rela <- apply(cluster_mergeda, 1, function(x) x/sum(x)) # rows 1 als prozente
+
+cluster_rela <- cluster_rela[names(sort(rowSums(cluster_rela), decreasing = TRUE)[1:15]), ]
+
+cluster_rela <- as.data.frame(cluster_rela)
+cluster_rela$Genus <- row.names(cluster_rela)
+for (i in 1:2) {
+ cluster_rela[, i] <- as.numeric(cluster_rela[, i])
+} # convert to numerical
+
+colnames(cluster_rela) <- c("community type 1", "community type 2", "Genus")
+molten_cluster_rela<- reshape2::melt(data = cluster_rela, id.vars = "Genus")
+molten_cluster_rela$labels <- scales::percent(molten_cluster_rela$value)
+
+
+#Dim1
+PCA_contrib.1 <-  molten_cluster_rela %>%
+  dplyr::filter(variable == "community type 1") %>%
+  slice_max(n=10, order_by = abs(value))
+
+PCA_contrib.1 %>%
+  mutate(Genus=fct_reorder(Genus, value)) %>%
+  ggplot(aes(x=value, y=Genus)) +
+  geom_segment(aes(x=value, xend=0, y=Genus, yend=Genus), color="black") +
+  geom_point(aes(size=3, color=value)) +
+  scale_color_gradient2 (low = "#0C4C00", high = "#CC6600", mid = "#FFCC99", midpoint = 0) +
+  theme_bw() +
+  geom_vline(xintercept = 0, linetype = 2, color="grey40") +
+  scale_x_continuous(labels = scales::percent) +
+  ggtitle("Contribution to community type 1") +
+  ylab("") +
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14))-> p1.con
+
+#Dim1
+PCA_contrib.1 <-  molten_cluster_rela %>%
+  dplyr::filter(variable == "community type 2") %>%
+  slice_max(n=10, order_by = abs(value))
+
+PCA_contrib.1 %>%
+  mutate(Genus=fct_reorder(Genus, value)) %>%
+  ggplot(aes(x=value, y=Genus)) +
+  geom_segment(aes(x=value, xend=0, y=Genus, yend=Genus), color="black") +
+  geom_point(aes(size=3, color=value)) +
+  scale_color_gradient2 (low = "#0C4C00", high = "#CC6600", mid = "#FFCC99", midpoint = 0) +
+  theme_bw() +
+  geom_vline(xintercept = 0, linetype = 2, color="grey40") +
+  scale_x_continuous(labels = scales::percent) +
+   ggtitle("Contribution to community type 2") +
+  ylab("") +
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14)) -> p2.con
+
+
+cowplot::plot_grid(p1.con, p2.con, align = "hv")->ppa
+ggsave(ppa, width = 13, height = 5, dpi = 300, device = "svg", filename = "figures/new.figures/ contribution.community.ana.svg")
+
+
+
+
+
+
+```
+```{r}
+
+getMyWesAndersonColor <- function(n, name) {
+  wesanderson::wes_palette(n, name = "GrandBudapest1",
+                           type = "continuous") }
+
+kk <- getMyWesAndersonColor(30, name = "GrandBudapest1")
+str(kk)
+
+variable <- list(
+  'community type 1' = "community type 1",
+  'community type 2' = "community type 2"
+)
+
+label_variable <- function(variable,value){
+  return(treatment[value])
+}
+
+phyla_bar <- ggplot(molten_cluster_rela, aes(fill = Genus, y = value, x = variable)) + 
+  geom_bar(position = "fill", stat = "identity", alpha = 0.8, colour = "black") +
+  facet_grid(~variable, 
+             scales = "free_x",
+             labeller = label_variable) +
+  ylab("Relative abundance") +
+  theme_classic() +
+  theme(panel.spacing = unit(0.5, "lines"),
+        plot.title = element_text(face = "bold"), #bold title
+        axis.title = element_blank(),
+        axis.text.x = element_text(angle = 90),
+        legend.text = element_text(face = "italic", size = 10), #italic legend
+        legend.title = element_text(face = "bold"),
+        text = element_text(size = 15),
+        strip.text.x = element_text(size = 15, face = "bold"),
+        plot.background = element_rect(fill = "transparent",
+                                       colour = NA_character_), # necessary to avoid drawing plot outline
+        legend.background = element_rect(fill = "transparent")) + 
+  guides(fill = guide_legend(title = "Genus", reverse = TRUE, ncol = 2)) +
+  scale_fill_manual(values = rev(kk)) +
+  scale_x_discrete(expand = c(0, 0)) + #expand adjusts margin around plot
+  scale_y_continuous(expand = c(0, 0))
+
+ggsave(phyla_bar, width = 11, height = 8, dpi = 300, device = "svg", filename = "figures/new.figures/phyla_bar.ana.svg")
+
+```
+other approach 
+```{r}
+
+getMyWesAndersonColor <- function(n, name) {
+  wesanderson::wes_palette(n, name = "GrandBudapest1",
+                           type = "continuous") }
+
+
+data <- molten_cluster_rela
+data.1 <- data %>%
+ dplyr::filter(variable == "community type 1")
+data.1$value <- as.numeric(data.1$value)
+data.1$value <- round(data.1$value, digits = 2)
+
+# Compute the position of labels
+
+data.1 <- data.1 %>% 
+  mutate(csum = rev(cumsum(rev(value))), 
+         pos = value/2 + lead(csum, 1),
+         pos = if_else(is.na(pos), value/2, pos))
+
+plot.ana.com.1 <- ggplot(data.1, aes(x = "" , y = value, fill = Genus)) +
+  geom_col(width = 1, color = 1) +
+  coord_polar(theta = "y") +
+  geom_label_repel(data = data.1,
+                   aes(y = pos, label = Genus),
+                   size = 3, nudge_x = 1, show.legend = FALSE) +
+  guides(fill = guide_legend(title = "Genus")) +
+  theme_void()+
+  scale_fill_manual(values = getMyWesAndersonColor(15))
+
+data.2 <- data %>%
+ dplyr::filter(variable == "community type 2")
+data.2$value <- as.numeric(data.2$value)
+data.2$value <- round(data.2$value, digits = 2)
+
+# Compute the position of labels
+
+data.2 <- data.2 %>% 
+  mutate(csum = rev(cumsum(rev(value))), 
+         pos = value/2 + lead(csum, 1),
+         pos = if_else(is.na(pos), value/2, pos))
+
+plot.ana.com.2 <- ggplot(data.2, aes(x = "" , y = value, fill = Genus)) +
+  geom_col(width = 1, color = 1) +
+  coord_polar(theta = "y") +
+  geom_label_repel(data = data.2,
+                   aes(y = pos, label = Genus),
+                   size = 3, nudge_x = 1, show.legend = FALSE) +
+  guides(fill = guide_legend(title = "Genus")) +
+  theme_void()+
+  scale_fill_manual(values = getMyWesAndersonColor(15))
+```
+
+try the loading thingy for the pcoa
+
+```{r}
+remotes::install_github("gavinsimpson/ggvegan")
+
+```
+

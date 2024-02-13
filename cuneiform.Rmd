@@ -1,0 +1,143 @@
+---
+title: "plot"
+author: "Theda Bartolomaeus"
+date: "9/28/2022"
+output: html_document
+---
+
+
+This time we are looking at timepoint differences between the two groups
+```{r}
+d.v.a <- read.table("output/", sep = ",", header = T, row.names = 1)
+
+ds.ana <- read.table(file = "output/cliffs_all_bacteria.anal.qvalues.excluded.csv", sep = ",", header = T, row.names = 1)
+ds.ana$t2_3 <- NULL
+ds.ana$padj_time <- as.numeric(ds.ana$padj_time)
+ds.ana$padj_treatment <- as.numeric(ds.ana$padj_treatment)
+ds.ana$padj_interaction <- as.numeric(ds.ana$padj_interaction)
+# #long format?
+ds.ana %>%
+  reshape2::melt(id.vars=c("groups")) -> ds.ana.long
+d.v.a.long$value <- as.numeric(d.v.a.long$value)
+
+write.table(ds.ana.long, file = "output/helper_alal.tsv", sep ="\t", quote = F)
+```
+
+```{r}
+time <-ggplot (ds.ana, aes (x = Comparison, y = groups)) + geom_point (aes (fill = Delta, shape = as.factor (sign (Delta)), size = abs (Delta))) +
+          scale_shape_manual (values = c (25, 17, 24)) + scale_fill_gradient2 (low = "#0C4C00", high ="#65014B", mid = "white", midpoint = 0) +
+          geom_text (aes (label = stars.pval (padj_time)))+
+  theme_bw()+
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14, angle = 90)) +
+   ggtitle("test time effect")
+
+treatment <-ggplot (ds.ana, aes (x = Comparison, y = groups)) + geom_point (aes (fill = Delta, shape = as.factor (sign (Delta)), size = abs (Delta))) +
+          scale_shape_manual (values = c (25, 17, 24)) + scale_fill_gradient2 (low = "#0C4C00", high ="#65014B", mid = "white", midpoint = 0) +
+          geom_text (aes (label = stars.pval (padj_treatment)))+
+  theme_bw()+
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14, angle = 90)) +
+  ggtitle("test treatment effect")
+
+interaction <-ggplot (ds.ana, aes (x = Comparison, y = groups)) + geom_point (aes (fill = Delta, shape = as.factor (sign (Delta)), size = abs (Delta))) +
+          scale_shape_manual (values = c (25, 17, 24)) + scale_fill_gradient2 (low = "#0C4C00", high ="#65014B", mid = "white", midpoint = 0) +
+          geom_text (aes (label = stars.pval (padj_interaction)))+
+  theme_bw()+
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14, angle = 90)) +
+  ggtitle("test inetraction effect")
+
+cowplot::plot_grid(time, treatment, interaction, align = "hv", nrow = 1) -> anal
+
+ggsave(anal, width = 21, height = 7, dpi = 300, device = "svg", filename = "figures/new.figures/new_cuniform.anal.with.test.svg")
+
+```
+
+
+```{r}
+d.v.a <- read.table("output/cliffs_d_all_bacteria.vagina.excluded.csv", sep = ",", header = T, row.names = 1)
+
+
+d.v.a$padj_time <- as.numeric(d.v.a$padj_time)
+d.v.a$padj_treatment <- as.numeric(d.v.a$padj_treatment)
+d.v.a$padj_interaction <- as.numeric(d.v.a$padj_interaction)
+
+time <-ggplot (d.v.a, aes (x = Comparison, y = groups)) + geom_point (aes (fill = Delta, shape = as.factor (sign (Delta)), size = abs (Delta))) +
+          scale_shape_manual (values = c (25, 17, 24)) + scale_fill_gradient2 (low = "#0C4C00", high ="#65014B", mid = "white", midpoint = 0) +
+          geom_text (aes (label = stars.pval (padj_time)))+
+  theme_bw()+
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14, angle = 90)) +
+   ggtitle("test time effect")
+
+treatment <-ggplot (d.v.a, aes (x = Comparison, y = groups)) + geom_point (aes (fill = Delta, shape = as.factor (sign (Delta)), size = abs (Delta))) +
+          scale_shape_manual (values = c (25, 17, 24)) + scale_fill_gradient2 (low = "#0C4C00", high ="#65014B", mid = "white", midpoint = 0) +
+          geom_text (aes (label = stars.pval (padj_treatment)))+
+  theme_bw()+
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14, angle = 90)) +
+  ggtitle("test treatment effect")
+
+interaction <-ggplot (d.v.a, aes (x = Comparison, y = groups)) + geom_point (aes (fill = Delta, shape = as.factor (sign (Delta)), size = abs (Delta))) +
+          scale_shape_manual (values = c (25, 17, 24)) + scale_fill_gradient2 (low = "#0C4C00", high ="#65014B", mid = "white", midpoint = 0) +
+          geom_text (aes (label = stars.pval (padj_interaction)))+
+  theme_bw()+
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14, angle = 90)) +
+  ggtitle("test inetraction effect")
+
+cowplot::plot_grid(time, treatment, interaction, align = "hv", nrow = 1) -> vagina
+
+ggsave(vagina, width = 21, height = 7, dpi = 300, device = "svg", filename = "figures/new.figures/new_cuniform.vagina.with.test.svg")
+
+```
+
+```{r}
+
+
+
+```
+# cuneiform plot
+```{r}
+ggplot (ds.vag, aes  (y = variable, x = meta_Time)) + geom_point (aes (fill = Ds_ControlvsTreatment, shape = as.factor (sign (Ds_ControlvsTreatment)), size = abs (Ds_ControlvsTreatment))) +
+          scale_shape_manual (values = c (25,2, 24)) + scale_fill_gradient2 (low = "blue", high = "red", mid = "white", midpoint = 0)+
+  theme_bw()+
+  theme(axis.text.y = element_text(size=14),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.x = element_text(size=14, angle = 90)) -> cu.v
+
+ggsave(cu.v, width = 7, height = 7, dpi = 300, device = "svg", filename = "figures/new.figures/new_cuniform.vag.control.treatment.svg")
+```
+
+# p values 
+```{r}
+# load pvalues 
+p.ana <- read.table("output/p.values.modeltanal.csv", sep = ",", header = T, row.names = 1)
+p.ana$p.treatment_TP1vs.TP2 <- p.adjust(p.ana$p.treatment_TP1vs.TP2, method = "fdr")
+p.ana$p.time_TP1vs.TP2 <- p.adjust(p.ana$p.time_TP1vs.TP2, method = "fdr")
+p.ana$p.interaction_TP1vs.TP2 <- p.adjust(p.ana$p.interaction_TP1vs.TP2, method = "fdr")
+p.ana$p.treatment_TP2vs.TP3 <- p.adjust(p.ana$p.treatment_TP2vs.TP3, method = "fdr")
+p.ana$p.time_TP2vs.TP3 <- p.adjust(p.ana$p.time_TP2vs.TP3, method = "fdr")
+p.ana$p.interaction_TP2vs.TP3 <- p.adjust(p.ana$p.interaction_TP2vs.TP3, method = "fdr")
+p.ana$p.treatment_TP1vs.TP3 <- p.adjust(p.ana$p.treatment_TP1vs.TP3, method = "fdr")
+p.ana$p.time_TP1vs.TP3 <- p.adjust(p.ana$p.time_TP1vs.TP3, method = "fdr")
+p.ana$p.interaction_TP1vs.TP3 <- p.adjust(p.ana$p.interaction_TP1vs.TP3, method = "fdr")
+
+write.table(p.ana, file = "output/p.ana.adjust.tsv", sep = "\t", quote= F)
+
+```
+
